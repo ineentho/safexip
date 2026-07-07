@@ -97,11 +97,9 @@ git push origin v0.1.0
 ```
 
 The release workflow uploads the Linux packages to the GitHub Release and pushes
-Docker images to Docker Hub as `${DOCKERHUB_REPOSITORY}:<version>` and
-`${DOCKERHUB_REPOSITORY}:latest`. Configure these repository settings first:
+Docker images to Docker Hub as `ineentho/safexip:<version>` and
+`ineentho/safexip:latest`. Configure this repository secret first:
 
-- `vars.DOCKERHUB_USERNAME`
-- `vars.DOCKERHUB_REPOSITORY`, for example `henrikkarlsson/safexip`
 - `secrets.DOCKERHUB_TOKEN`
 
 Manual workflow runs build package artifacts without publishing a GitHub Release
