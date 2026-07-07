@@ -1,0 +1,9 @@
+# Build artifacts
+/target/
+
+# Let's Encrypt account keys and issued certificates (private — never commit)
+/.lego/
+/.lego-staging/
+
+# Transient debug notes
+/debug-summary.txt

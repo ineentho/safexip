@@ -1,0 +1,24 @@
+[Unit]
+Description=safexip xip-style DNS server
+Documentation=https://github.com/henrikkarlsson/safexip
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/safexip
+EnvironmentFile=/etc/safexip/env
+Restart=on-failure
+RestartSec=5
+
+# CAP_NET_BIND_SERVICE allows binding to port 53 without full root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
