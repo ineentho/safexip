@@ -13,20 +13,20 @@ contents:
   - src: ./target/release/safexip
     dst: /usr/bin/safexip
     file_info:
-      mode: "0755"
+      mode: 0755
   - src: ./safexip.service
     dst: /usr/lib/systemd/system/safexip.service
     file_info:
-      mode: "0644"
+      mode: 0644
   - dst: /etc/safexip
     type: dir
     file_info:
-      mode: "0755"
+      mode: 0755
   - src: ./packaging/safexip.env
     dst: /etc/safexip/env
     type: config|noreplace
     file_info:
-      mode: "0600"
+      mode: 0600
 scripts:
   postinstall: ./packaging/scripts/postinstall.sh
   postremove: ./packaging/scripts/postremove.sh
