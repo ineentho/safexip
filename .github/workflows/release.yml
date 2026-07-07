@@ -34,7 +34,9 @@ jobs:
 
       - name: Install nFPM
         run: |
-          curl -sfL https://install.goreleaser.com/github.com/goreleaser/nfpm.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://github.com/goreleaser/nfpm/releases/download/v2.47.0/nfpm_2.47.0_amd64.deb -o /tmp/nfpm.deb
+          sudo dpkg -i /tmp/nfpm.deb
+          nfpm --version
 
       - name: Resolve version
         id: version
@@ -73,7 +75,7 @@ jobs:
   docker:
     name: Build and push Docker image
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && vars.DOCKERHUB_USERNAME != '' && vars.DOCKERHUB_REPOSITORY != ''
     steps:
       - name: Checkout
         uses: actions/checkout@v4
