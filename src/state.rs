@@ -27,10 +27,6 @@ impl AcmeRecords {
         }
     }
 
-    pub async fn delete_all(&self, name: &str) {
-        self.records.write().await.remove(name);
-    }
-
     pub async fn get(&self, name: &str) -> Vec<String> {
         self.records.read().await.get(name).cloned().unwrap_or_default()
     }

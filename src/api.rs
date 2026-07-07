@@ -34,24 +34,12 @@ struct PresentRequest {
     value: String,
 }
 
-#[derive(Deserialize)]
-struct SetTxtRequest {
-    name: String,
-    value: String,
-}
-
-#[derive(Deserialize)]
-struct DeleteTxtRequest {
-    name: String,
-}
-
 pub fn router(config: Config, acme: AcmeRecords) -> Router {
     let state = ApiState { config, acme };
     Router::new()
         .route("/health", get(health))
         .route("/present", post(present))
         .route("/cleanup", post(cleanup))
-        .route("/v1/txt", post(set_txt).delete(delete_txt))
         .with_state(state)
 }
 
@@ -62,7 +50,7 @@ async fn health(State(state): State<ApiState>) -> Json<StatusResponse> {
     })
 }
 
-// --- httpreq protocol (lego --dns httpreq) ---
+// --- lego --dns httpreq protocol ---
 
 async fn present(
     State(state): State<ApiState>,
@@ -93,67 +81,7 @@ async fn cleanup(
     Ok(Json(serde_json::json!({})))
 }
 
-// --- admin endpoints ---
-
-async fn set_txt(
-    State(state): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<SetTxtRequest>,
-) -> Result<Json<StatusResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin_auth(&headers, &state.config)?;
-
-    if !body.name.ends_with(&format!(".{}", state.config.domain))
-        && body.name != state.config.domain
-    {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("name must be within domain {}", state.config.domain),
-            }),
-        ));
-    }
-
-    state.acme.add(body.name.clone(), body.value).await;
-    tracing::info!("set TXT: {}", body.name);
-
-    Ok(Json(StatusResponse {
-        status: "set",
-        domain: state.config.domain,
-    }))
-}
-
-async fn delete_txt(
-    State(state): State<ApiState>,
-    headers: HeaderMap,
-    axum::extract::Query(params): axum::extract::Query<DeleteTxtRequest>,
-) -> Result<Json<StatusResponse>, (StatusCode, Json<ErrorResponse>)> {
-    check_admin_auth(&headers, &state.config)?;
-
-    state.acme.delete_all(&params.name).await;
-    tracing::info!("deleted TXT: {}", params.name);
-
-    Ok(Json(StatusResponse {
-        status: "deleted",
-        domain: state.config.domain,
-    }))
-}
-
-// --- auth helpers ---
-
-fn check_admin_auth(
-    headers: &HeaderMap,
-    config: &Config,
-) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    let key = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-
-    match key {
-        Some(k) if k == config.api_key => Ok(()),
-        _ => Err(unauthorized("missing or invalid admin API key")),
-    }
-}
+// --- auth ---
 
 fn check_basic_auth(
     headers: &HeaderMap,
@@ -173,6 +101,7 @@ fn check_basic_auth(
         return Err(unauthorized("missing Basic auth"));
     };
 
+    // Username is ignored; only the password must match the API key.
     let (_user, pass) = decoded.split_once(':').unwrap_or(("", &decoded));
 
     if pass == config.api_key {
