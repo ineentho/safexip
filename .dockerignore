@@ -1,0 +1,6 @@
+target
+.git
+.github
+.lego
+.lego-staging
+debug-summary.txt

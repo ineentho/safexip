@@ -78,18 +78,35 @@ Multiple developers can issue certificates simultaneously. Each `lego` run uses 
 
 ## Packaging
 
-### .deb (Debian/Ubuntu)
+### Linux packages
 
 ```bash
-# On the target machine:
-cargo install cargo-deb
-cargo deb --install
-
-# Or cross-compile from macOS:
-make cross-deb   # → target/x86_64-linux/safexip_*.deb
+# Requires nFPM.
+make package
 ```
 
-The package installs `/usr/bin/safexip` and `/lib/systemd/system/safexip.service`.
+The package build writes `.deb`, `.rpm`, `.apk`, and Arch Linux packages to `dist/`.
+Packages install `/usr/bin/safexip`, `/usr/lib/systemd/system/safexip.service`, and
+`/etc/safexip/env`.
+
+GitHub releases are published by pushing a version tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow uploads the Linux packages to the GitHub Release and pushes
+Docker images to Docker Hub as `${DOCKERHUB_REPOSITORY}:<version>` and
+`${DOCKERHUB_REPOSITORY}:latest`. Configure these repository settings first:
+
+- `vars.DOCKERHUB_USERNAME`
+- `vars.DOCKERHUB_REPOSITORY`, for example `henrikkarlsson/safexip`
+- `secrets.DOCKERHUB_TOKEN`
+
+Manual workflow runs build package artifacts without publishing a GitHub Release
+or Docker image. Provide the optional `version` input to override the Cargo
+version for those dry runs.
 
 ### systemd
 

@@ -17,16 +17,3 @@ anyhow = "1"
 chrono = "0.4"
 base64 = "0.22"
 rand = "0.8"
-
-[package.metadata.deb]
-name = "safexip"
-maintainer = "Henrik Karlsson <henrik@example.com>"
-copyright = "2026 Henrik Karlsson"
-extended-description = "Self-hosted xip-style DNS server with ACME DNS-01 API for wildcard TLS certs"
-section = "net"
-priority = "optional"
-depends = "$auto"
-assets = [
-  ["target/release/safexip", "usr/bin/", "755"],
-  ["safexip.service", "lib/systemd/system/", "644"],
-]
