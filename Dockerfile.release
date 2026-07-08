@@ -1,0 +1,13 @@
+FROM debian:bookworm-slim
+
+ARG TARGETARCH
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY dist/docker/${TARGETARCH}/safexip /usr/bin/safexip
+RUN chmod 0755 /usr/bin/safexip
+
+EXPOSE 53/udp 53/tcp 8080/tcp
+ENTRYPOINT ["/usr/bin/safexip"]
