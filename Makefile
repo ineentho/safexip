@@ -3,31 +3,42 @@ PACKAGE_ARCH ?= amd64
 export VERSION
 export PACKAGE_ARCH
 
-.PHONY: build package package-deb package-rpm package-apk package-arch clean
+.PHONY: build check test package package-deb package-rpm package-apk package-arch check-linux clean
 
 build:
-	cargo build --release
+	cargo build --release --locked
 
-package: build
+test:
+	cargo test --all-targets --locked
+
+check:
+	cargo fmt --all -- --check
+	cargo clippy --all-targets --all-features --locked -- -D warnings
+	cargo test --all-targets --locked
+
+check-linux:
+	@test "$$(uname -s)" = Linux || { echo "error: Linux packages must be built on Linux" >&2; exit 1; }
+
+package: check-linux build
 	mkdir -p dist
 	nfpm package --packager deb --target dist/
 	nfpm package --packager rpm --target dist/
 	nfpm package --packager apk --target dist/
 	nfpm package --packager archlinux --target dist/
 
-package-deb: build
+package-deb: check-linux build
 	mkdir -p dist
 	nfpm package --packager deb --target dist/
 
-package-rpm: build
+package-rpm: check-linux build
 	mkdir -p dist
 	nfpm package --packager rpm --target dist/
 
-package-apk: build
+package-apk: check-linux build
 	mkdir -p dist
 	nfpm package --packager apk --target dist/
 
-package-arch: build
+package-arch: check-linux build
 	mkdir -p dist
 	nfpm package --packager archlinux --target dist/
 

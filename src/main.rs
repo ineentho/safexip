@@ -5,11 +5,16 @@ mod state;
 mod xip;
 
 use std::error::Error;
+use std::io::ErrorKind;
+use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use tokio::net::{TcpListener, UdpSocket};
+use tokio::sync::Semaphore;
+use tokio::time::timeout;
 use tracing_subscriber::EnvFilter;
 
 use config::Config;
@@ -19,14 +24,17 @@ use state::AcmeRecords;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
+        .with_ansi(std::io::stdout().is_terminal())
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("safexip=info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("safexip=info")),
         )
         .init();
 
     let config = Config::parse();
-    let acme = AcmeRecords::new();
+    config
+        .validate()
+        .map_err(|error| format!("invalid configuration: {error}"))?;
+    let acme = AcmeRecords::new(config.token_lifetime(), config.max_tokens);
 
     tracing::info!("starting safexip for domain {}", config.domain);
     tracing::info!("NS: {} -> {}", config.ns_hostname, config.ns_ip);
@@ -38,32 +46,68 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     // UDP DNS listener
-    let udp_addr: SocketAddr = format!("{}:{}", config.dns_bind, config.dns_port).parse()?;
+    let udp_addr = SocketAddr::new(config.dns_bind, config.dns_port);
     let udp_sock = UdpSocket::bind(udp_addr).await?;
     tracing::info!("UDP DNS listening on {udp_addr}");
-
-    let udp_handler = handler.clone();
-    tokio::spawn(async move {
-        run_udp_dns(udp_sock, udp_handler).await;
-    });
 
     // TCP DNS listener
     let tcp_listener = TcpListener::bind(udp_addr).await?;
     tracing::info!("TCP DNS listening on {udp_addr}");
 
-    tokio::spawn(async move {
-        run_tcp_dns(tcp_listener, handler).await;
-    });
-
     // HTTP API
-    let api_addr: SocketAddr = format!("{}:{}", config.api_bind, config.api_port).parse()?;
+    let api_addr = SocketAddr::new(config.api_bind, config.api_port);
     tracing::info!("API listening on {api_addr}");
 
     let app = api::router(config.clone(), acme);
     let listener = tokio::net::TcpListener::bind(api_addr).await?;
-    axum::serve(listener, app).await?;
+
+    tokio::select! {
+        _ = run_udp_dns(udp_sock, handler.clone()) => {
+            return Err("UDP DNS listener stopped unexpectedly".into());
+        }
+        _ = run_tcp_dns(tcp_listener, handler) => {
+            return Err("TCP DNS listener stopped unexpectedly".into());
+        }
+        result = axum::serve(listener, app) => {
+            result?;
+        }
+        _ = shutdown_signal() => {
+            tracing::info!("shutdown signal received");
+        }
+    }
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    result = tokio::signal::ctrl_c() => {
+                        if let Err(error) = result {
+                            tracing::error!("failed to listen for Ctrl-C: {error}");
+                        }
+                    }
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(error) => {
+                tracing::error!("failed to listen for SIGTERM: {error}");
+                if let Err(error) = tokio::signal::ctrl_c().await {
+                    tracing::error!("failed to listen for Ctrl-C: {error}");
+                }
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    if let Err(error) = tokio::signal::ctrl_c().await {
+        tracing::error!("failed to listen for Ctrl-C: {error}");
+    }
 }
 
 async fn run_udp_dns(sock: UdpSocket, handler: Arc<DnsHandler>) {
@@ -78,7 +122,7 @@ async fn run_udp_dns(sock: UdpSocket, handler: Arc<DnsHandler>) {
         };
         let data = buf[..len].to_vec();
         let handler = handler.clone();
-        let response = handler.handle(&data).await;
+        let response = handler.handle_udp(&data).await;
         if !response.is_empty() {
             if let Err(e) = sock.send_to(&response, src).await {
                 tracing::error!("UDP send error: {e}");
@@ -88,7 +132,15 @@ async fn run_udp_dns(sock: UdpSocket, handler: Arc<DnsHandler>) {
 }
 
 async fn run_tcp_dns(listener: TcpListener, handler: Arc<DnsHandler>) {
+    const MAX_CONNECTIONS: usize = 1024;
+    const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+    let permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
+        let permit = match permits.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => return,
+        };
         let (mut stream, addr) = match listener.accept().await {
             Ok(v) => v,
             Err(e) => {
@@ -98,29 +150,57 @@ async fn run_tcp_dns(listener: TcpListener, handler: Arc<DnsHandler>) {
         };
         let handler = handler.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             use tokio::io::AsyncReadExt;
             use tokio::io::AsyncWriteExt;
 
-            let mut len_buf = [0u8; 2];
-            if let Err(e) = stream.read_exact(&mut len_buf).await {
-                tracing::debug!("TCP read length from {addr}: {e}");
-                return;
-            }
-            let msg_len = u16::from_be_bytes(len_buf) as usize;
-            let mut msg_buf = vec![0u8; msg_len];
-            if let Err(e) = stream.read_exact(&mut msg_buf).await {
-                tracing::debug!("TCP read msg from {addr}: {e}");
-                return;
-            }
+            loop {
+                let mut len_buf = [0u8; 2];
+                match timeout(READ_TIMEOUT, stream.read_exact(&mut len_buf)).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) if error.kind() == ErrorKind::UnexpectedEof => return,
+                    Ok(Err(error)) => {
+                        tracing::debug!("TCP read length from {addr}: {error}");
+                        return;
+                    }
+                    Err(_) => {
+                        tracing::debug!("TCP connection from {addr} timed out");
+                        return;
+                    }
+                }
+                let msg_len = u16::from_be_bytes(len_buf) as usize;
+                if msg_len == 0 {
+                    return;
+                }
+                let mut msg_buf = vec![0u8; msg_len];
+                match timeout(READ_TIMEOUT, stream.read_exact(&mut msg_buf)).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => {
+                        tracing::debug!("TCP read message from {addr}: {error}");
+                        return;
+                    }
+                    Err(_) => {
+                        tracing::debug!("TCP message from {addr} timed out");
+                        return;
+                    }
+                }
 
-            let response = handler.handle(&msg_buf).await;
-            let resp_len = (response.len() as u16).to_be_bytes();
-            if let Err(e) = stream.write_all(&[resp_len[0], resp_len[1]]).await {
-                tracing::debug!("TCP write len to {addr}: {e}");
-                return;
-            }
-            if let Err(e) = stream.write_all(&response).await {
-                tracing::debug!("TCP write msg to {addr}: {e}");
+                let response = handler.handle(&msg_buf).await;
+                if response.is_empty() {
+                    return;
+                }
+                let Ok(resp_len) = u16::try_from(response.len()) else {
+                    tracing::error!("TCP DNS response exceeded 65535 bytes");
+                    return;
+                };
+                if let Err(error) = stream.write_all(&resp_len.to_be_bytes()).await {
+                    tracing::debug!("TCP write length to {addr}: {error}");
+                    return;
+                }
+                if let Err(error) = stream.write_all(&response).await {
+                    tracing::debug!("TCP write message to {addr}: {error}");
+                    return;
+                }
             }
         });
     }

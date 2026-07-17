@@ -4,9 +4,9 @@ platform: linux
 version: ${VERSION}
 section: net
 priority: optional
-maintainer: Henrik Karlsson <henrik@example.com>
+maintainer: Henrik Karlsson <ineentho@users.noreply.github.com>
 vendor: Henrik Karlsson
-homepage: https://github.com/henrikkarlsson/safexip
+homepage: https://github.com/ineentho/safexip
 license: MIT
 description: Self-hosted xip-style DNS server with ACME DNS-01 API for wildcard TLS certs.
 contents:
@@ -16,6 +16,10 @@ contents:
       mode: 0755
   - src: ./safexip.service
     dst: /usr/lib/systemd/system/safexip.service
+    file_info:
+      mode: 0644
+  - src: ./LICENSE
+    dst: /usr/share/doc/safexip/LICENSE
     file_info:
       mode: 0644
   - dst: /etc/safexip

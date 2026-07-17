@@ -1,43 +1,52 @@
 # safexip
 
-Self-hosted xip-style DNS server with an ACME DNS-01 HTTP API for wildcard TLS certificates. Private keys never leave your machine — safexip only holds the short-lived challenge tokens.
+Self-hosted authoritative xip-style DNS server with an ACME DNS-01 HTTP API for wildcard TLS certificates. Private keys remain with the ACME client; safexip only stores challenge tokens, and automatically expires them after ten minutes by default.
 
 ## How it works
 
-1. Delegate a subdomain (e.g. `xip.example.com`) to safexip via NS records in your parent zone.
-2. safexip resolves xip-style hostnames: `127-0-0-1.xip.example.com` → `127.0.0.1`.
-3. During issuance, lego POSTs the ACME challenge token to safexip, which serves it as a TXT record at `_acme-challenge.xip.example.com`.
-4. Let's Encrypt validates the challenge; the cert (and its private key) are written locally by lego.
+1. Delegate a subdomain such as `xip.example.com` to safexip using NS records in the parent zone.
+2. safexip resolves encoded IPv4 hostnames such as `127-0-0-1.xip.example.com` to `127.0.0.1`.
+3. During issuance, lego posts the ACME challenge to safexip's authenticated HTTP API.
+4. safexip publishes the challenge at `_acme-challenge.xip.example.com`; lego keeps the certificate and private key locally.
+
+## Installation
+
+Download Linux packages from the [GitHub releases](https://github.com/ineentho/safexip/releases), use the Docker image `ineentho/safexip`, or build from source with Rust 1.88 or newer:
+
+```bash
+cargo build --release --locked
+```
 
 ## Quick start
 
-### Start the server
+Generate a key and start the server. This example keeps the credential-bearing API on loopback, so lego must run on the same machine:
 
 ```bash
-SAFEXIP_API_KEY=$(openssl rand -hex 32) \
-SAFEXIP_DOMAIN=xip.example.com \
-SAFEXIP_NS_HOSTNAME=ns1.xip.example.com \
-SAFEXIP_NS_IP=1.2.3.4 \
+export SAFEXIP_API_KEY="$(openssl rand -hex 32)"
+export SAFEXIP_DOMAIN=xip.example.com
+export SAFEXIP_NS_HOSTNAME=ns1.xip.example.com
+export SAFEXIP_NS_HOSTNAME2=ns2.xip.example.com
+export SAFEXIP_NS_IP=1.2.3.4
+
 safexip
 ```
 
-In your parent zone, delegate the subdomain (glue A records must live in the parent):
+In the parent zone, create the delegation and glue records:
 
-```
+```text
 xip.example.com.     NS ns1.xip.example.com.
 xip.example.com.     NS ns2.xip.example.com.
 ns1.xip.example.com. A  1.2.3.4
 ns2.xip.example.com. A  1.2.3.4
 ```
 
-### Generate a wildcard certificate
-
-safexip speaks lego's `httpreq` DNS provider directly, so no helper script is needed:
+In another shell on the safexip host, request a certificate with [lego's `httpreq` provider](https://go-acme.github.io/lego/dns/httpreq/):
 
 ```bash
-export HTTPREQ_ENDPOINT=http://1.2.3.4:8080
-export HTTPREQ_USERNAME=safexip        # any value; only the password matters
-export HTTPREQ_PASSWORD=$SAFEXIP_API_KEY
+export SAFEXIP_API_KEY='<the same generated key>'
+export HTTPREQ_ENDPOINT=http://127.0.0.1:8080
+export HTTPREQ_USERNAME=safexip
+export HTTPREQ_PASSWORD="$SAFEXIP_API_KEY"
 
 lego run --dns httpreq --accept-tos \
   --domains '*.xip.example.com' \
@@ -45,101 +54,116 @@ lego run --dns httpreq --accept-tos \
   --path ./.lego
 ```
 
-The cert and key are written to `.lego/certificates/`.
+The certificate and key are written to `.lego/certificates/`.
+
+## Remote ACME clients
+
+HTTP Basic authentication does not protect credentials on an unencrypted connection. Keep `SAFEXIP_API_BIND=127.0.0.1` when lego runs locally. For remote clients, put an HTTPS reverse proxy in front of port 8080, configure `SAFEXIP_API_BIND` to an address reachable only by that proxy, and set `HTTPREQ_ENDPOINT` to the HTTPS URL. Do not expose the API directly over the public internet with plain HTTP.
 
 ## DNS records served
 
 | Query | Response |
 |---|---|
-| `<octets>.xip.example.com` A (e.g. `127-0-0-1...`) | A `<ip>` |
-| `_acme-challenge.xip.example.com` TXT | TXT tokens set via the API |
-| `xip.example.com` NS / SOA | zone NS and SOA |
+| `<octets>.xip.example.com` A, such as `127-0-0-1...` | Encoded IPv4 address |
+| `_acme-challenge.xip.example.com` TXT | One TXT record per active token |
+| `xip.example.com` NS / SOA | Zone NS and SOA records |
+| Names outside the configured zone | `REFUSED` |
+
+Both UDP and TCP DNS are supported. Oversized UDP responses set the truncation flag so resolvers retry over TCP.
 
 ## HTTP API
 
-`GET /health` — no auth.
+`GET /health` requires no authentication:
 
 ```json
 {"status":"ok","domain":"xip.example.com"}
 ```
 
-`POST /present` and `POST /cleanup` — require HTTP Basic auth (password = API key; username ignored). These follow lego's `httpreq` protocol.
+`POST /present` and `POST /cleanup` implement lego's default `httpreq` protocol and require HTTP Basic authentication. The username is ignored and the password must equal `SAFEXIP_API_KEY`.
 
 ```json
-{"fqdn": "_acme-challenge.xip.example.com.", "value": "<token>"}
+{"fqdn":"_acme-challenge.xip.example.com.","value":"<token>"}
 ```
 
-- `/present` adds a token. Multiple tokens coexist at the same name.
-- `/cleanup` removes **only the specific token**, never other developers' tokens.
+Only the configured zone's exact ACME challenge name is accepted. `/present` adds or refreshes a token; `/cleanup` removes only the specified token. Distinct concurrent challenges are served as separate TXT records. Duplicate tokens are deduplicated, the active-token count is bounded, and abandoned tokens expire automatically.
 
-## Concurrent certificate generation
+## Docker
 
-Multiple developers can issue certificates simultaneously. Each `lego` run uses a distinct ACME token; safexip stores all tokens at `_acme-challenge.xip.example.com` and serves them together, and each `lego` run cleans up only its own token. The practical limit is Let's Encrypt's duplicate-certificate rate limit (5 per week for the same name set), not safexip.
-
-## Packaging
-
-### Linux packages
+The image runs as an unprivileged user. To use the HTTP API from another container or an HTTPS reverse proxy, explicitly bind it inside the container:
 
 ```bash
-# Requires nFPM.
+docker run --rm \
+  --name safexip \
+  -p 53:53/udp -p 53:53/tcp -p 127.0.0.1:8080:8080/tcp \
+  -e SAFEXIP_API_KEY="$(openssl rand -hex 32)" \
+  -e SAFEXIP_DOMAIN=xip.example.com \
+  -e SAFEXIP_NS_HOSTNAME=ns1.xip.example.com \
+  -e SAFEXIP_NS_HOSTNAME2=ns2.xip.example.com \
+  -e SAFEXIP_NS_IP=1.2.3.4 \
+  -e SAFEXIP_API_BIND=0.0.0.0 \
+  ineentho/safexip:0.2.0
+```
+
+Use an immutable version tag in production, not `latest`.
+
+## Linux packages and systemd
+
+Packages install `/usr/bin/safexip`, `/usr/lib/systemd/system/safexip.service`, and `/etc/safexip/env`. Edit `/etc/safexip/env`, replace the empty API key, configure the zone, and then start the service:
+
+```bash
+sudo systemctl enable --now safexip
+```
+
+The service uses a dynamic unprivileged user and receives only `CAP_NET_BIND_SERVICE` for port 53.
+
+To build `.deb`, `.rpm`, `.apk`, and Arch Linux packages locally, run the following on an amd64 Linux host with [nFPM](https://nfpm.goreleaser.com/) installed:
+
+```bash
 make package
 ```
 
-The package build writes `.deb`, `.rpm`, `.apk`, and Arch Linux packages to `dist/`.
-Packages install `/usr/bin/safexip`, `/usr/lib/systemd/system/safexip.service`, and
-`/etc/safexip/env`.
-
-GitHub releases are published by pushing a version tag:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The release workflow uploads the Linux packages to the GitHub Release and pushes
-Docker images to Docker Hub as `ineentho/safexip:<version>` and
-`ineentho/safexip:latest`. Configure this repository secret first:
-
-- `secrets.DOCKERHUB_TOKEN`
-
-Manual workflow runs build package artifacts without publishing a GitHub Release
-or Docker image. Provide the optional `version` input to override the Cargo
-version for those dry runs.
-
-### systemd
-
-Configure via `/etc/safexip/env`:
-
-```ini
-SAFEXIP_API_KEY=your-secret-key
-SAFEXIP_DOMAIN=xip.example.com
-SAFEXIP_NS_HOSTNAME=ns1.xip.example.com
-SAFEXIP_NS_HOSTNAME2=ns2.xip.example.com
-SAFEXIP_NS_IP=1.2.3.4
-SAFEXIP_DNS_BIND=1.2.3.4
-SAFEXIP_API_BIND=1.2.3.4
-SAFEXIP_API_PORT=8080
-# RUST_LOG=safexip=debug   # optional, for verbose DNS query logging
-```
-
-```bash
-systemctl enable --now safexip
-```
+The Makefile refuses to create Linux packages on another operating system. Official packages are built on Linux by the release workflow.
 
 ## Configuration
 
-All options are env vars (or equivalent `--flags`):
+Every option is available as an environment variable or equivalent command-line flag.
 
-| Env var | Default | Description |
+| Environment variable | Default | Description |
 |---|---|---|
-| `SAFEXIP_API_KEY` | required | Shared secret for the HTTP API |
-| `SAFEXIP_DOMAIN` | `xip.example.com` | Zone apex |
-| `SAFEXIP_NS_HOSTNAME` | `ns1.xip.example.com` | Primary NS name |
-| `SAFEXIP_NS_HOSTNAME2` | `ns2.xip.example.com` | Secondary NS name |
-| `SAFEXIP_NS_IP` | `127.0.0.1` | IP for both NS names (glue) |
+| `SAFEXIP_API_KEY` | required | API secret; at least 32 characters |
+| `SAFEXIP_DOMAIN` | `xip.example.com` | Lowercased zone apex; a trailing dot is accepted |
+| `SAFEXIP_NS_HOSTNAME` | `ns1.xip.example.com` | Primary in-zone NS name |
+| `SAFEXIP_NS_HOSTNAME2` | `ns2.xip.example.com` | Distinct secondary in-zone NS name |
+| `SAFEXIP_NS_IP` | `127.0.0.1` | IPv4 glue address for both NS names |
 | `SAFEXIP_DNS_BIND` | `0.0.0.0` | DNS listen address |
-| `SAFEXIP_DNS_PORT` | `53` | DNS port |
-| `SAFEXIP_API_BIND` | `0.0.0.0` | HTTP API listen address |
+| `SAFEXIP_DNS_PORT` | `53` | DNS UDP/TCP port |
+| `SAFEXIP_API_BIND` | `127.0.0.1` | HTTP API listen address |
 | `SAFEXIP_API_PORT` | `8080` | HTTP API port |
-| `SAFEXIP_TXT_TTL` | `60` | TTL for TXT records |
-| `SAFEXIP_DEFAULT_TTL` | `60` | TTL for A/NS records |
+| `SAFEXIP_TXT_TTL` | `60` | TXT TTL in seconds, 1–86400 |
+| `SAFEXIP_DEFAULT_TTL` | `60` | A/NS TTL in seconds, 1–86400 |
+| `SAFEXIP_TOKEN_LIFETIME` | `600` | Token lifetime in seconds, 1–86400 |
+| `SAFEXIP_MAX_TOKENS` | `100` | Maximum active tokens, 1–10000 |
+| `RUST_LOG` | `safexip=info` | Tracing filter; use `safexip=debug` for DNS queries |
+
+Configuration is validated before any listener starts. Names are normalized to lowercase, nameservers must be distinct and inside the delegated zone, addresses must parse correctly, and insecurely short API keys are rejected.
+
+## Development and releases
+
+Run the same quality gates as CI:
+
+```bash
+make check
+```
+
+To publish a release, update the version in `Cargo.toml`, commit it, and push a matching tag:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The release workflow verifies formatting, Clippy, tests, dependency advisories, and tag/version equality before building. It publishes four amd64 Linux packages, checksums, and amd64/arm64 Docker images. The GitHub release is created only after both package and Docker jobs succeed. Manual workflow runs build package artifacts without publishing.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -1,4 +1,4 @@
-FROM rust:1-bookworm AS builder
+FROM rust:1.96.0-bookworm AS builder
 WORKDIR /src
 
 COPY Cargo.toml Cargo.lock ./
@@ -7,10 +7,17 @@ RUN cargo build --release --locked
 
 FROM debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/target/release/safexip /usr/bin/safexip
+COPY LICENSE /usr/share/licenses/safexip/LICENSE
+RUN groupadd --gid 10001 safexip \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin safexip \
+    && setcap cap_net_bind_service=+ep /usr/bin/safexip
 
 EXPOSE 53/udp 53/tcp 8080/tcp
+LABEL org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/ineentho/safexip"
+USER 10001
 ENTRYPOINT ["/usr/bin/safexip"]

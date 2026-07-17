@@ -1,19 +1,27 @@
 [package]
 name = "safexip"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+rust-version = "1.88"
+description = "Self-hosted xip-style authoritative DNS server with an ACME DNS-01 API"
+license = "MIT"
+repository = "https://github.com/ineentho/safexip"
+homepage = "https://github.com/ineentho/safexip"
+readme = "README.md"
+publish = false
 
 [dependencies]
-hickory-proto = "0.24"
-tokio = { version = "1", features = ["full"] }
-axum = "0.7"
-tower-http = { version = "0.5", features = ["cors"] }
+hickory-proto = "0.26.1"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+axum = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-anyhow = "1"
 chrono = "0.4"
 base64 = "0.22"
-rand = "0.8"
+subtle = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

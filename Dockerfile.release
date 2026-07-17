@@ -3,11 +3,18 @@ FROM debian:bookworm-slim
 ARG TARGETARCH
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
 
 COPY dist/docker/${TARGETARCH}/safexip /usr/bin/safexip
-RUN chmod 0755 /usr/bin/safexip
+COPY LICENSE /usr/share/licenses/safexip/LICENSE
+RUN chmod 0755 /usr/bin/safexip \
+    && groupadd --gid 10001 safexip \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin safexip \
+    && setcap cap_net_bind_service=+ep /usr/bin/safexip
 
 EXPOSE 53/udp 53/tcp 8080/tcp
+LABEL org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/ineentho/safexip"
+USER 10001
 ENTRYPOINT ["/usr/bin/safexip"]

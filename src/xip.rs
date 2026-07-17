@@ -38,3 +38,31 @@ fn parse_octets(octets: &[&str]) -> Option<Ipv4Addr> {
     }
     Some(Ipv4Addr::from(b))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn domain_matching_respects_label_boundaries_and_case() {
+        assert!(is_our_domain("XIP.TEST", "xip.test"));
+        assert!(is_our_domain("host.XIP.TEST", "xip.test"));
+        assert!(!is_our_domain("notxip.test", "xip.test"));
+        assert!(!is_our_domain("xip.test.example", "xip.test"));
+    }
+
+    #[test]
+    fn parses_valid_ipv4_octets() {
+        assert_eq!(
+            parse_xip_ip("service-192-0-2-10.xip.test", "xip.test"),
+            Some(Ipv4Addr::new(192, 0, 2, 10))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_or_out_of_zone_octets() {
+        assert_eq!(parse_xip_ip("256-0-0-1.xip.test", "xip.test"), None);
+        assert_eq!(parse_xip_ip("127-0-0.xip.test", "xip.test"), None);
+        assert_eq!(parse_xip_ip("127-0-0-1.other.test", "xip.test"), None);
+    }
+}
