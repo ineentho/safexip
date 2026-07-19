@@ -162,7 +162,7 @@ curl --fail --show-error --silent \
 curl --head http://203-0-113-10.xip.example.com/health
 ```
 
-The health response is `{"status":"ok","domain":"xip.example.com"}` and HTTP must redirect to HTTPS. Traefik is the only public HTTP entry point; safexip port 8080 is reachable only on the private Compose network. The read-only Docker socket still provides significant control-plane visibility; use a socket proxy if the threat model requires stronger isolation.
+The health response is `{"status":"ok","domain":"xip.example.com"}` and HTTP must redirect to HTTPS. Traefik is the only public HTTP entry point; safexip port 8080 is reachable only on the private Compose network. Safexip's body, timeout, connection, concurrency, and authenticated rate limits are defense in depth against direct exposure or proxy mistakes; they do not replace HTTPS, the private backend port, or Traefik's public-edge rate limit. The read-only Docker socket still provides significant control-plane visibility; use a socket proxy if the threat model requires stronger isolation.
 
 ### 5. Initialize an employee safely
 

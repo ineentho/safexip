@@ -13,14 +13,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
+use tower::ServiceExt;
 use tracing_subscriber::EnvFilter;
 
 use config::Config;
 use dns::DnsHandler;
 use state::AcmeRecords;
+
+const MAX_HTTP_CONNECTIONS: usize = 128;
+const HTTP_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -73,7 +80,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         _ = run_tcp_dns(tcp_listener, handler) => {
             return Err("TCP DNS listener stopped unexpectedly".into());
         }
-        result = axum::serve(listener, app) => {
+        result = run_http_api(listener, app) => {
             result?;
         }
         _ = shutdown_signal() => {
@@ -82,6 +89,58 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+async fn run_http_api(listener: TcpListener, app: axum::Router) -> std::io::Result<()> {
+    run_http_api_with_limits(
+        listener,
+        app,
+        MAX_HTTP_CONNECTIONS,
+        HTTP_HEADER_READ_TIMEOUT,
+    )
+    .await
+}
+
+async fn run_http_api_with_limits(
+    listener: TcpListener,
+    app: axum::Router,
+    max_connections: usize,
+    header_read_timeout: Duration,
+) -> std::io::Result<()> {
+    let permits = Arc::new(Semaphore::new(max_connections));
+    loop {
+        let (stream, addr) = match listener.accept().await {
+            Ok(connection) => connection,
+            Err(error) => {
+                tracing::error!("HTTP accept error: {error}");
+                continue;
+            }
+        };
+        let Ok(permit) = permits.clone().try_acquire_owned() else {
+            tracing::debug!("HTTP connection limit reached; rejecting {addr}");
+            drop(stream);
+            continue;
+        };
+        let app = app.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            let service = service_fn(move |request| {
+                let app = app.clone();
+                async move { app.oneshot(request.map(axum::body::Body::new)).await }
+            });
+            let mut builder = http1::Builder::new();
+            builder
+                .timer(TokioTimer::new())
+                .header_read_timeout(header_read_timeout)
+                .max_headers(32);
+            if let Err(error) = builder
+                .serve_connection(TokioIo::new(stream), service)
+                .await
+            {
+                tracing::debug!("HTTP connection from {addr} closed: {error}");
+            }
+        });
+    }
 }
 
 async fn shutdown_signal() {
@@ -208,5 +267,66 @@ async fn run_tcp_dns(listener: TcpListener, handler: Arc<DnsHandler>) {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod http_tests {
+    use axum::routing::get;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn header_timeout_and_connection_limit_release_capacity() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = axum::Router::new().route("/", get(|| async { "ok" }));
+        let server = tokio::spawn(run_http_api_with_limits(
+            listener,
+            app,
+            1,
+            Duration::from_millis(50),
+        ));
+
+        let mut held = tokio::net::TcpStream::connect(addr).await.unwrap();
+        held.write_all(b"GET / HTTP/1.1\r\nHost:").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let mut rejected = tokio::net::TcpStream::connect(addr).await.unwrap();
+        rejected
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut byte = [0];
+        let read = tokio::time::timeout(Duration::from_millis(200), rejected.read(&mut byte))
+            .await
+            .expect("over-capacity connection was not closed");
+        assert!(read.map_or(true, |length| length == 0));
+
+        let held_read = tokio::time::timeout(Duration::from_millis(200), held.read(&mut byte))
+            .await
+            .expect("incomplete headers were not timed out");
+        assert!(held_read.map_or(true, |length| length == 0));
+
+        let mut recovered = tokio::net::TcpStream::connect(addr).await.unwrap();
+        recovered
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            recovered.read_to_end(&mut response),
+        )
+        .await
+        .expect("recovered connection did not respond")
+        .unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200"));
+
+        server.abort();
+        let _ = server.await;
     }
 }
