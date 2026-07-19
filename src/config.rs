@@ -4,6 +4,8 @@ use std::time::Duration;
 use clap::Parser;
 use hickory_proto::rr::Name;
 
+use crate::wire::AcmeWireCapacity;
+
 const MIN_API_KEY_LEN: usize = 32;
 
 #[derive(Parser, Debug, Clone)]
@@ -113,6 +115,12 @@ impl Config {
             Name::from_ascii(&derived)
                 .map_err(|error| format!("derived DNS name {derived} is invalid: {error}"))?;
         }
+        let wire_max = AcmeWireCapacity::from_config(self).maximum_token_count();
+        if self.max_tokens > wire_max {
+            return Err(format!(
+                "token limit must be between 1 and {wire_max} for the configured DNS names"
+            ));
+        }
         Ok(())
     }
 
@@ -147,8 +155,8 @@ fn parse_max_tokens(raw: &str) -> Result<usize, String> {
     let value = raw
         .parse::<usize>()
         .map_err(|error| format!("invalid token limit: {error}"))?;
-    if !(1..=10_000).contains(&value) {
-        return Err("token limit must be between 1 and 10000".into());
+    if value == 0 {
+        return Err("token limit must be at least 1".into());
     }
     Ok(value)
 }
@@ -206,5 +214,19 @@ mod tests {
 
         config.ns_hostname2 = "ns.other.test".into();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_token_limit_above_the_zone_wire_maximum() {
+        let mut config = valid_config();
+        let wire_max = AcmeWireCapacity::from_config(&config).maximum_token_count();
+        config.max_tokens = wire_max;
+        assert!(config.validate().is_ok());
+
+        config.max_tokens = wire_max + 1;
+        assert_eq!(
+            config.validate().unwrap_err(),
+            format!("token limit must be between 1 and {wire_max} for the configured DNS names")
+        );
     }
 }

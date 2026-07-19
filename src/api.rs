@@ -68,7 +68,10 @@ async fn present(
         .add(name.clone(), body.value)
         .await
         .map_err(|error| match error {
-            AddError::CapacityReached => service_unavailable("active token limit reached"),
+            AddError::TokenLimitReached => service_unavailable("active token limit reached"),
+            AddError::DnsWireCapacityReached => {
+                service_unavailable("active TXT records have reached DNS TCP capacity")
+            }
         })?;
     tracing::info!("present: {name}");
 
@@ -162,6 +165,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+    use crate::wire::AcmeWireCapacity;
 
     const KEY: &str = "0123456789abcdef0123456789abcdef";
 
@@ -184,7 +188,13 @@ mod tests {
     }
 
     fn app() -> Router {
-        router(config(), AcmeRecords::new(Duration::from_secs(60), 10))
+        let config = config();
+        let records = AcmeRecords::new(
+            Duration::from_secs(60),
+            10,
+            AcmeWireCapacity::from_config(&config),
+        );
+        router(config, records)
     }
 
     fn request(path: &str, auth: Option<&str>, body: &str) -> Request<Body> {
@@ -253,8 +263,13 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_removes_only_the_requested_token() {
-        let records = AcmeRecords::new(Duration::from_secs(60), 10);
-        let app = router(config(), records.clone());
+        let config = config();
+        let records = AcmeRecords::new(
+            Duration::from_secs(60),
+            10,
+            AcmeWireCapacity::from_config(&config),
+        );
+        let app = router(config, records.clone());
         for value in ["token-one", "token-two"] {
             let body = serde_json::json!({
                 "fqdn": "_acme-challenge.xip.test.",
@@ -279,7 +294,13 @@ mod tests {
 
     #[tokio::test]
     async fn reports_capacity_exhaustion() {
-        let app = router(config(), AcmeRecords::new(Duration::from_secs(60), 1));
+        let config = config();
+        let records = AcmeRecords::new(
+            Duration::from_secs(60),
+            1,
+            AcmeWireCapacity::from_config(&config),
+        );
+        let app = router(config, records);
         for (index, expected) in [(1, StatusCode::OK), (2, StatusCode::SERVICE_UNAVAILABLE)] {
             let body = serde_json::json!({
                 "fqdn": "_acme-challenge.xip.test.",
@@ -292,5 +313,48 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn reports_dns_wire_capacity_without_changing_existing_records() {
+        use axum::body::to_bytes;
+
+        let config = config();
+        let records = AcmeRecords::new(
+            Duration::from_secs(60),
+            usize::MAX,
+            AcmeWireCapacity::from_config(&config),
+        );
+        let app = router(config, records.clone());
+        let mut accepted = Vec::new();
+
+        loop {
+            let value = format!("{:04}{}", accepted.len(), "x".repeat(251));
+            let body = serde_json::json!({
+                "fqdn": "_acme-challenge.xip.test.",
+                "value": value,
+            });
+            let response = app
+                .clone()
+                .oneshot(request("/present", Some(&auth(KEY)), &body.to_string()))
+                .await
+                .unwrap();
+            if response.status() == StatusCode::OK {
+                accepted.push(value);
+                continue;
+            }
+
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({
+                    "error": "active TXT records have reached DNS TCP capacity"
+                })
+            );
+            break;
+        }
+
+        assert_eq!(records.get("_acme-challenge.xip.test").await, accepted);
     }
 }

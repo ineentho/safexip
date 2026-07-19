@@ -1,11 +1,12 @@
 use std::net::Ipv4Addr;
 
 use hickory_proto::op::{Edns, Message, MessageType, OpCode, ResponseCode};
-use hickory_proto::rr::rdata::{A, NS, SOA, TXT};
+use hickory_proto::rr::rdata::{A, NS};
 use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
 
 use crate::config::Config;
 use crate::state::AcmeRecords;
+use crate::wire::{self, txt_record};
 use crate::xip;
 
 const MAX_UDP_PAYLOAD: u16 = 1232;
@@ -26,7 +27,7 @@ impl DnsHandler {
         }
 
         let response = self.build_response(&request).await;
-        response.to_vec().unwrap_or_default()
+        self.encode_complete_or_servfail(&request, &response)
     }
 
     pub async fn handle_udp(&self, raw: &[u8]) -> Vec<u8> {
@@ -39,11 +40,51 @@ impl DnsHandler {
         }
         let max_payload = usize::from(request.max_payload().min(MAX_UDP_PAYLOAD));
         let response = self.build_response(&request).await;
-        let encoded = response.to_vec().unwrap_or_default();
+        let encoded = self.encode_complete_or_servfail(&request, &response);
         if encoded.len() <= max_payload {
             encoded
         } else {
-            response.truncate().to_vec().unwrap_or_default()
+            match response.truncate().to_vec() {
+                Ok(encoded) => encoded,
+                Err(error) => {
+                    tracing::error!("failed to serialize truncated UDP DNS response: {error}");
+                    self.servfail(&request)
+                }
+            }
+        }
+    }
+
+    fn encode_complete_or_servfail(&self, request: &Message, response: &Message) -> Vec<u8> {
+        match response.to_vec() {
+            Ok(encoded) => match Message::from_vec(&encoded) {
+                Ok(decoded) if !decoded.metadata.truncation => encoded,
+                Ok(_) => {
+                    tracing::error!("DNS response serialization dropped records");
+                    self.servfail(request)
+                }
+                Err(error) => {
+                    tracing::error!("failed to verify serialized DNS response: {error}");
+                    self.servfail(request)
+                }
+            },
+            Err(error) => {
+                tracing::error!("failed to serialize DNS response: {error}");
+                self.servfail(request)
+            }
+        }
+    }
+
+    fn servfail(&self, request: &Message) -> Vec<u8> {
+        let mut response = Message::response(request.metadata.id, request.metadata.op_code);
+        response.metadata.response_code = ResponseCode::ServFail;
+        response.metadata.recursion_desired = request.metadata.recursion_desired;
+        response.add_queries(request.queries.iter().cloned());
+        match response.to_vec() {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                tracing::error!("failed to serialize SERVFAIL DNS response: {error}");
+                Vec::new()
+            }
         }
     }
 
@@ -199,13 +240,7 @@ impl DnsHandler {
         };
         values
             .into_iter()
-            .map(|value| {
-                Record::from_rdata(
-                    name.clone(),
-                    self.config.txt_ttl,
-                    RData::TXT(TXT::new(vec![value])),
-                )
-            })
+            .map(|value| txt_record(name.clone(), self.config.txt_ttl, value))
             .collect()
     }
 
@@ -257,19 +292,10 @@ impl DnsHandler {
 
     fn soa(&self) -> Record {
         let serial = chrono::Utc::now().timestamp() as u32;
-        let soa = SOA::new(
-            Name::from_ascii(&self.config.ns_hostname).unwrap(),
-            Name::from_ascii(format!("admin.{}", self.config.domain)).unwrap(),
+        wire::soa_record(
+            &Name::from_ascii(&self.config.domain).unwrap(),
+            &Name::from_ascii(&self.config.ns_hostname).unwrap(),
             serial,
-            3600,
-            900,
-            86400,
-            10, // minimum TTL — governs negative caching (NXDOMAIN + NODATA). Low for fast ACME retry.
-        );
-        Record::from_rdata(
-            Name::from_ascii(&self.config.domain).unwrap(),
-            10, // SOA record TTL — also used for negative caching by some resolvers.
-            RData::SOA(soa),
         )
     }
 }
@@ -280,6 +306,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::state::AddError;
+    use crate::wire::AcmeWireCapacity;
     use hickory_proto::op::{Message, MessageType, Query};
 
     fn make_config() -> Config {
@@ -301,7 +329,12 @@ mod tests {
     }
 
     fn acme() -> AcmeRecords {
-        AcmeRecords::new(Duration::from_secs(60), 100)
+        let config = make_config();
+        AcmeRecords::new(
+            Duration::from_secs(60),
+            100,
+            AcmeWireCapacity::from_config(&config),
+        )
     }
 
     fn query_msg(name: &str, qtype: RecordType) -> Vec<u8> {
@@ -396,7 +429,12 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_udp_response_is_truncated() {
-        let acme = AcmeRecords::new(Duration::from_secs(60), 100);
+        let config = make_config();
+        let acme = AcmeRecords::new(
+            Duration::from_secs(60),
+            100,
+            AcmeWireCapacity::from_config(&config),
+        );
         for index in 0..20 {
             acme.add(
                 "_acme-challenge.xip.test".into(),
@@ -420,7 +458,12 @@ mod tests {
 
     #[tokio::test]
     async fn large_rrset_is_complete_without_udp_limit() {
-        let acme = AcmeRecords::new(Duration::from_secs(60), 100);
+        let config = make_config();
+        let acme = AcmeRecords::new(
+            Duration::from_secs(60),
+            100,
+            AcmeWireCapacity::from_config(&config),
+        );
         for index in 0..20 {
             acme.add(
                 "_acme-challenge.xip.test".into(),
@@ -429,10 +472,7 @@ mod tests {
             .await
             .unwrap();
         }
-        let handler = DnsHandler {
-            config: make_config(),
-            acme,
-        };
+        let handler = DnsHandler { config, acme };
         let raw = query_msg("_acme-challenge.xip.test", RecordType::TXT);
         let response = Message::from_vec(&handler.handle(&raw).await).unwrap();
         assert!(!response.metadata.truncation);
@@ -523,6 +563,83 @@ mod tests {
         let edns = response.edns.unwrap();
         assert_eq!(edns.max_payload(), MAX_UDP_PAYLOAD);
         assert!(edns.flags().dnssec_ok);
+    }
+
+    #[tokio::test]
+    async fn udp_truncation_falls_back_to_a_complete_tcp_answer_at_capacity() {
+        let config = make_config();
+        let acme = AcmeRecords::new(
+            Duration::from_secs(60),
+            usize::MAX,
+            AcmeWireCapacity::from_config(&config),
+        );
+        let name = "_acme-challenge.xip.test";
+        let mut accepted = 0;
+        loop {
+            let value = format!("{accepted:04}{}", "x".repeat(251));
+            match acme.add(name.into(), value).await {
+                Ok(()) => accepted += 1,
+                Err(AddError::DnsWireCapacityReached) => break,
+                Err(error) => panic!("unexpected error: {error:?}"),
+            }
+        }
+        let handler = DnsHandler { config, acme };
+        let raw = query_msg(name, RecordType::TXT);
+
+        let udp = Message::from_vec(&handler.handle_udp(&raw).await).unwrap();
+        assert!(udp.metadata.truncation);
+
+        let tcp_bytes = handler.handle(&raw).await;
+        assert!(tcp_bytes.len() <= u16::MAX as usize);
+        let tcp = Message::from_vec(&tcp_bytes).unwrap();
+        assert!(!tcp.metadata.truncation);
+        assert_eq!(tcp.metadata.response_code, ResponseCode::NoError);
+        assert_eq!(tcp.answers.len(), accepted);
+    }
+
+    #[tokio::test]
+    async fn unexpected_serialization_truncation_returns_servfail() {
+        let handler = DnsHandler {
+            config: make_config(),
+            acme: acme(),
+        };
+        let raw = query_msg("_acme-challenge.xip.test", RecordType::TXT);
+        let request = Message::from_vec(&raw).unwrap();
+        let mut response = Message::response(request.metadata.id, OpCode::Query);
+        response.add_query(request.queries[0].clone());
+        let name = Name::from_ascii("_acme-challenge.xip.test").unwrap();
+        for _ in 0..400 {
+            response.add_answer(txt_record(name.clone(), 60, "x".repeat(255)));
+        }
+
+        let encoded = handler.encode_complete_or_servfail(&request, &response);
+        let response = Message::from_vec(&encoded).unwrap();
+        assert_eq!(response.metadata.response_code, ResponseCode::ServFail);
+        assert!(!response.metadata.truncation);
+        assert!(response.answers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn serialization_error_returns_servfail() {
+        let handler = DnsHandler {
+            config: make_config(),
+            acme: acme(),
+        };
+        let raw = query_msg("_acme-challenge.xip.test", RecordType::TXT);
+        let request = Message::from_vec(&raw).unwrap();
+        let mut response = Message::response(request.metadata.id, OpCode::Query);
+        response.add_query(request.queries[0].clone());
+        response.add_answer(txt_record(
+            Name::from_ascii("_acme-challenge.xip.test").unwrap(),
+            60,
+            "x".repeat(256),
+        ));
+
+        let encoded = handler.encode_complete_or_servfail(&request, &response);
+        let response = Message::from_vec(&encoded).unwrap();
+        assert_eq!(response.metadata.response_code, ResponseCode::ServFail);
+        assert!(!response.metadata.truncation);
+        assert!(response.answers.is_empty());
     }
 
     #[tokio::test]
