@@ -10,14 +10,30 @@ homepage: https://github.com/ineentho/safexip
 license: MIT OR Apache-2.0
 description: Self-hosted xip-style DNS server with ACME DNS-01 API for wildcard TLS certs.
 contents:
-  - src: ./target/release/safexip
+  - src: ./target/x86_64-unknown-linux-musl/release/safexip
     dst: /usr/bin/safexip
     file_info:
       mode: 0755
   - src: ./safexip.service
     dst: /usr/lib/systemd/system/safexip.service
+    packager: deb
     file_info:
       mode: 0644
+  - src: ./safexip.service
+    dst: /usr/lib/systemd/system/safexip.service
+    packager: rpm
+    file_info:
+      mode: 0644
+  - src: ./safexip.service
+    dst: /usr/lib/systemd/system/safexip.service
+    packager: archlinux
+    file_info:
+      mode: 0644
+  - src: ./packaging/safexip.initd
+    dst: /etc/init.d/safexip
+    packager: apk
+    file_info:
+      mode: 0755
   - src: ./LICENSE-APACHE
     dst: /usr/share/doc/safexip/LICENSE-APACHE
     file_info:
@@ -35,6 +51,41 @@ contents:
     type: config|noreplace
     file_info:
       mode: 0600
-scripts:
-  postinstall: ./packaging/scripts/postinstall.sh
-  postremove: ./packaging/scripts/postremove.sh
+overrides:
+  deb:
+    depends:
+      - systemd
+    scripts:
+      postinstall: ./packaging/scripts/deb-postinstall.sh
+      preremove: ./packaging/scripts/deb-preremove.sh
+      postremove: ./packaging/scripts/systemd-postremove.sh
+  rpm:
+    depends:
+      - systemd
+    scripts:
+      postinstall: ./packaging/scripts/rpm-postinstall.sh
+      preremove: ./packaging/scripts/rpm-preremove.sh
+      postremove: ./packaging/scripts/systemd-postremove.sh
+  apk:
+    depends:
+      - openrc
+      - libcap
+    scripts:
+      postinstall: ./packaging/scripts/openrc-postinstall.sh
+      preremove: ./packaging/scripts/openrc-preremove.sh
+      postremove: ./packaging/scripts/openrc-postremove.sh
+  archlinux:
+    depends:
+      - systemd
+    scripts:
+      postinstall: ./packaging/scripts/systemd-postinstall.sh
+      preremove: ./packaging/scripts/systemd-preremove.sh
+      postremove: ./packaging/scripts/systemd-postremove.sh
+
+apk:
+  scripts:
+    postupgrade: ./packaging/scripts/openrc-postupgrade.sh
+
+archlinux:
+  scripts:
+    postupgrade: ./packaging/scripts/systemd-postupgrade.sh
