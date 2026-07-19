@@ -3,7 +3,7 @@ PACKAGE_ARCH ?= amd64
 export VERSION
 export PACKAGE_ARCH
 
-.PHONY: build check test package package-deb package-rpm package-apk package-arch check-linux clean
+.PHONY: build check test package package-deb package-rpm package-arch check-linux clean
 
 build:
 	cargo build --release --locked
@@ -23,7 +23,6 @@ package: check-linux build
 	mkdir -p dist
 	nfpm package --packager deb --target dist/
 	nfpm package --packager rpm --target dist/
-	nfpm package --packager apk --target dist/
 	nfpm package --packager archlinux --target dist/
 
 package-deb: check-linux build
@@ -33,10 +32,6 @@ package-deb: check-linux build
 package-rpm: check-linux build
 	mkdir -p dist
 	nfpm package --packager rpm --target dist/
-
-package-apk: check-linux build
-	mkdir -p dist
-	nfpm package --packager apk --target dist/
 
 package-arch: check-linux build
 	mkdir -p dist

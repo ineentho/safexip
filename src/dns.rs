@@ -1,8 +1,8 @@
 use std::net::Ipv4Addr;
 
-use hickory_proto::op::{Edns, Message, OpCode, ResponseCode};
+use hickory_proto::op::{Edns, Message, MessageType, OpCode, ResponseCode};
 use hickory_proto::rr::rdata::{A, NS, SOA, TXT};
-use hickory_proto::rr::{Name, RData, Record, RecordType};
+use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
 
 use crate::config::Config;
 use crate::state::AcmeRecords;
@@ -21,6 +21,9 @@ impl DnsHandler {
             Ok(msg) => msg,
             Err(_) => return b"".to_vec(),
         };
+        if request.metadata.message_type != MessageType::Query {
+            return Vec::new();
+        }
 
         let response = self.build_response(&request).await;
         response.to_vec().unwrap_or_default()
@@ -31,6 +34,9 @@ impl DnsHandler {
             Ok(msg) => msg,
             Err(_) => return Vec::new(),
         };
+        if request.metadata.message_type != MessageType::Query {
+            return Vec::new();
+        }
         let max_payload = usize::from(request.max_payload().min(MAX_UDP_PAYLOAD));
         let response = self.build_response(&request).await;
         let encoded = response.to_vec().unwrap_or_default();
@@ -66,6 +72,7 @@ impl DnsHandler {
         }
 
         if request.queries.len() != 1 {
+            response.metadata.authoritative = false;
             response.metadata.response_code = ResponseCode::FormErr;
             return response;
         }
@@ -82,6 +89,15 @@ impl DnsHandler {
 
         response.add_query(query.clone());
 
+        // safexip serves Internet-class data only. QCLASS ANY may select that
+        // data, but answering CH/HS questions with IN records is a protocol
+        // violation and can confuse diagnostic clients.
+        if !matches!(query.query_class(), DNSClass::IN | DNSClass::ANY) {
+            response.metadata.authoritative = false;
+            response.metadata.response_code = ResponseCode::NotImp;
+            return response;
+        }
+
         if !xip::is_our_domain(&qname_str, &self.config.domain) {
             response.metadata.authoritative = false;
             response.metadata.response_code = ResponseCode::Refused;
@@ -93,21 +109,29 @@ impl DnsHandler {
 
         match qtype {
             RecordType::SOA => {
-                response.add_answer(self.soa());
+                if qname_str == self.config.domain {
+                    response.add_answer(self.soa());
+                } else if !self.name_exists(&qname_str) {
+                    response.metadata.response_code = ResponseCode::NXDomain;
+                }
             }
             RecordType::NS => {
-                let zone = Name::from_ascii(&self.config.domain).unwrap();
-                let nss = [&self.config.ns_hostname, &self.config.ns_hostname2];
-                for ns in nss {
-                    let rec = Record::from_rdata(
-                        zone.clone(),
-                        self.config.default_ttl,
-                        RData::NS(NS(Name::from_ascii(ns).unwrap())),
-                    );
-                    response.add_answer(rec);
-                }
-                for glue in self.ns_glue() {
-                    response.add_additional(glue);
+                if qname_str == self.config.domain {
+                    let zone = Name::from_ascii(&self.config.domain).unwrap();
+                    let nss = [&self.config.ns_hostname, &self.config.ns_hostname2];
+                    for ns in nss {
+                        let rec = Record::from_rdata(
+                            zone.clone(),
+                            self.config.default_ttl,
+                            RData::NS(NS(Name::from_ascii(ns).unwrap())),
+                        );
+                        response.add_answer(rec);
+                    }
+                    for glue in self.ns_glue() {
+                        response.add_additional(glue);
+                    }
+                } else if !self.name_exists(&qname_str) {
+                    response.metadata.response_code = ResponseCode::NXDomain;
                 }
             }
             RecordType::A => {
@@ -390,6 +414,115 @@ mod tests {
         let response = Message::from_vec(&handler.handle_udp(&raw).await).unwrap();
         assert!(response.metadata.truncation);
         assert!(response.answers.is_empty());
+        assert_eq!(response.queries.len(), 1);
+        assert!(response.to_vec().unwrap().len() <= 512);
+    }
+
+    #[tokio::test]
+    async fn large_rrset_is_complete_without_udp_limit() {
+        let acme = AcmeRecords::new(Duration::from_secs(60), 100);
+        for index in 0..20 {
+            acme.add(
+                "_acme-challenge.xip.test".into(),
+                format!("{index:02}{}", "x".repeat(198)),
+            )
+            .await
+            .unwrap();
+        }
+        let handler = DnsHandler {
+            config: make_config(),
+            acme,
+        };
+        let raw = query_msg("_acme-challenge.xip.test", RecordType::TXT);
+        let response = Message::from_vec(&handler.handle(&raw).await).unwrap();
+        assert!(!response.metadata.truncation);
+        assert_eq!(response.answers.len(), 20);
+        assert!(response.answers.iter().all(|record| {
+            record.name.to_ascii() == "_acme-challenge.xip.test."
+                && record.dns_class == DNSClass::IN
+                && record.record_type() == RecordType::TXT
+        }));
+    }
+
+    #[tokio::test]
+    async fn soa_and_ns_are_apex_only_with_correct_owners() {
+        let handler = DnsHandler {
+            config: make_config(),
+            acme: acme(),
+        };
+        for qtype in [RecordType::SOA, RecordType::NS] {
+            let apex = run(&handler, "xip.test", qtype).await;
+            assert!(!apex.answers.is_empty());
+            assert!(apex.answers.iter().all(|record| {
+                record.name.to_ascii() == "xip.test."
+                    && record.dns_class == DNSClass::IN
+                    && record.record_type() == qtype
+            }));
+
+            let existing = run(&handler, "ns1.xip.test", qtype).await;
+            assert_eq!(existing.metadata.response_code, ResponseCode::NoError);
+            assert!(existing.answers.is_empty());
+
+            let nonexistent = run(&handler, "missing.xip.test", qtype).await;
+            assert_eq!(nonexistent.metadata.response_code, ResponseCode::NXDomain);
+            assert!(nonexistent.answers.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn unsupported_query_class_never_receives_in_records() {
+        let handler = DnsHandler {
+            config: make_config(),
+            acme: acme(),
+        };
+        let mut message = Message::new(7, MessageType::Query, OpCode::Query);
+        let mut query = Query::query(Name::from_ascii("xip.test").unwrap(), RecordType::SOA);
+        query.set_query_class(DNSClass::CH);
+        message.add_query(query);
+        let response =
+            Message::from_vec(&handler.handle(&message.to_vec().unwrap()).await).unwrap();
+        assert_eq!(response.metadata.response_code, ResponseCode::NotImp);
+        assert!(!response.metadata.authoritative);
+        assert!(response.answers.is_empty());
+        assert_eq!(response.queries[0].query_class(), DNSClass::CH);
+    }
+
+    #[tokio::test]
+    async fn semantically_malformed_messages_return_formerr() {
+        let handler = DnsHandler {
+            config: make_config(),
+            acme: acme(),
+        };
+        let request = Message::new(8, MessageType::Query, OpCode::Query);
+        let response =
+            Message::from_vec(&handler.handle(&request.to_vec().unwrap()).await).unwrap();
+        assert_eq!(response.metadata.response_code, ResponseCode::FormErr);
+        assert!(!response.metadata.authoritative);
+
+        let response = Message::new(9, MessageType::Response, OpCode::Query);
+        assert!(handler.handle(&response.to_vec().unwrap()).await.is_empty());
+        assert!(handler.handle_udp(&[0, 1, 2]).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn edns_payload_is_echoed_and_capped() {
+        let handler = DnsHandler {
+            config: make_config(),
+            acme: acme(),
+        };
+        let mut request = Message::new(10, MessageType::Query, OpCode::Query);
+        request.add_query(Query::query(
+            Name::from_ascii("xip.test").unwrap(),
+            RecordType::SOA,
+        ));
+        let mut edns = Edns::new();
+        edns.set_max_payload(4096).set_dnssec_ok(true);
+        request.set_edns(edns);
+        let response =
+            Message::from_vec(&handler.handle_udp(&request.to_vec().unwrap()).await).unwrap();
+        let edns = response.edns.unwrap();
+        assert_eq!(edns.max_payload(), MAX_UDP_PAYLOAD);
+        assert!(edns.flags().dnssec_ok);
     }
 
     #[tokio::test]

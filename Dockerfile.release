@@ -1,12 +1,17 @@
-FROM debian:bookworm-slim
+FROM rust:1.96.0-bookworm AS builder
+WORKDIR /src
 
-ARG TARGETARCH
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release --locked
+
+FROM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
 
-COPY dist/docker/${TARGETARCH}/safexip /usr/bin/safexip
+COPY --from=builder /src/target/release/safexip /usr/bin/safexip
 COPY LICENSE-APACHE LICENSE-MIT /usr/share/licenses/safexip/
 RUN chmod 0755 /usr/bin/safexip \
     && groupadd --gid 10001 safexip \

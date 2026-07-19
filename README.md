@@ -223,6 +223,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=1m,mode=1777
+    mem_limit: 128m
+    cpus: 1.0
     pids_limit: 128
     stop_grace_period: 15s
     networks:
@@ -560,7 +562,7 @@ Configuration is validated before listeners start. Names are normalized to lower
 
 ## Other installation methods
 
-Linux `.deb`, `.rpm`, `.apk`, and Arch packages are attached to each release. Packages install `/usr/bin/safexip`, `/usr/lib/systemd/system/safexip.service`, and `/etc/safexip/env`. The systemd unit runs under a dynamic unprivileged user with only `CAP_NET_BIND_SERVICE`.
+Linux `.deb`, `.rpm`, and Arch packages are attached to each release. Packages install `/usr/bin/safexip`, `/usr/lib/systemd/system/safexip.service`, and `/etc/safexip/env`. The systemd unit runs under a dynamic unprivileged user with only `CAP_NET_BIND_SERVICE`. Alpine APK is not published: the release binary targets glibc and the packaged service is systemd-specific, while Alpine normally requires a musl binary and OpenRC integration.
 
 To build from source, install Rust 1.88 or newer:
 
@@ -582,7 +584,7 @@ Run the same local quality gates as CI:
 make check
 ```
 
-The release workflow verifies formatting, Clippy, tests, dependency advisories, and tag/version equality. It publishes four amd64 Linux packages, checksums, and amd64/arm64 Docker images. A GitHub release is created only after both package and Docker publication succeed.
+The release workflow verifies formatting, Clippy, unit and real-listener integration tests, dependency advisories, and tag/version equality. It installs and starts all three amd64 Linux packages in matching systemd environments and smoke-tests the exact amd64/arm64 image digests with the documented UID, capabilities, read-only filesystem, and resource limits. Public Docker tags and the GitHub release are created only after the required smoke tests pass. Before a release, also perform the [delegated-zone ACME staging validation](docs/pre-release-acme.md).
 
 ## License
 
