@@ -1,0 +1,86 @@
+name: safexip
+
+services:
+  traefik:
+    image: traefik:v3.7.8@sha256:4299bbed850421258fc5448c2e0e6ad350981d4d335a68de11b92448aedbefe5
+    container_name: safexip-traefik
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+      - --certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - ${PUBLIC_IP}:80:80/tcp
+      - ${PUBLIC_IP}:443:443/tcp
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    networks:
+      - proxy
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  safexip:
+    image: ${SAFEXIP_IMAGE:?Set SAFEXIP_IMAGE to the release tag and verified digest}
+    container_name: safexip
+    restart: unless-stopped
+    env_file:
+      - ./safexip.env
+    environment:
+      SAFEXIP_DOMAIN: ${SAFEXIP_ZONE}
+      SAFEXIP_NS_HOSTNAME: ${SAFEXIP_NS1}
+      SAFEXIP_NS_HOSTNAME2: ${SAFEXIP_NS2}
+      SAFEXIP_NS_IP: ${PUBLIC_IP}
+      SAFEXIP_DNS_BIND: 0.0.0.0
+      SAFEXIP_DNS_PORT: "53"
+      SAFEXIP_API_BIND: 0.0.0.0
+      SAFEXIP_API_PORT: "8080"
+    ports:
+      - ${PUBLIC_IP}:53:53/udp
+      - ${PUBLIC_IP}:53:53/tcp
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=1m,mode=1777
+    pids_limit: 128
+    stop_grace_period: 15s
+    networks:
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: safexip_proxy
+      traefik.http.routers.safexip-api.rule: Host(`${SAFEXIP_API_HOST}`)
+      traefik.http.routers.safexip-api.entrypoints: websecure
+      traefik.http.routers.safexip-api.tls: "true"
+      traefik.http.routers.safexip-api.tls.certresolver: letsencrypt
+      traefik.http.routers.safexip-api.middlewares: safexip-api-ratelimit
+      traefik.http.middlewares.safexip-api-ratelimit.ratelimit.average: "5"
+      traefik.http.middlewares.safexip-api-ratelimit.ratelimit.burst: "10"
+      traefik.http.services.safexip-api.loadbalancer.server.port: "8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  proxy:
