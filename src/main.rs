@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod dns;
 mod state;
+mod wire;
 mod xip;
 
 use std::error::Error;
@@ -34,7 +35,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     config
         .validate()
         .map_err(|error| format!("invalid configuration: {error}"))?;
-    let acme = AcmeRecords::new(config.token_lifetime(), config.max_tokens);
+    let acme = AcmeRecords::new(
+        config.token_lifetime(),
+        config.max_tokens,
+        wire::AcmeWireCapacity::from_config(&config),
+    );
 
     tracing::info!("starting safexip for domain {}", config.domain);
     tracing::info!("NS: {} -> {}", config.ns_hostname, config.ns_ip);

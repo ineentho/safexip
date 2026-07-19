@@ -64,7 +64,7 @@ DNS is served over UDP and TCP. Oversized UDP responses are truncated so resolve
 {"fqdn":"_acme-challenge.xip.example.com.","value":"base64url-acme-value"}
 ```
 
-Only the configured zone's exact challenge name is accepted. Tokens must be non-empty DNS TXT strings no longer than 255 bytes. Duplicate values are refreshed, concurrent values are separate TXT records, active tokens are bounded, and abandoned tokens expire automatically.
+Only the configured zone's exact challenge name is accepted. Tokens must be non-empty DNS TXT strings no longer than 255 bytes. Duplicate values are refreshed, concurrent values are separate TXT records, active tokens are bounded, and abandoned tokens expire automatically. A presentation is rejected with HTTP 503 before it would make the complete active TXT record set too large for a DNS-over-TCP message; existing records are left unchanged.
 
 The endpoints implement lego's [`httpreq` provider](https://go-acme.github.io/lego/dns/httpreq/):
 
@@ -89,10 +89,10 @@ Every option is available as an environment variable or equivalent command-line 
 | `SAFEXIP_TXT_TTL` | `60` | TXT TTL in seconds, 1–86400 |
 | `SAFEXIP_DEFAULT_TTL` | `60` | A/NS TTL in seconds, 1–86400 |
 | `SAFEXIP_TOKEN_LIFETIME` | `600` | Token lifetime in seconds, 1–86400 |
-| `SAFEXIP_MAX_TOKENS` | `100` | Maximum active tokens, 1–10000 |
-| `RUST_LOG` | `safexip=info` | Tracing filter |
+| `SAFEXIP_MAX_TOKENS` | `100` | Maximum active tokens, from 1 to the DNS-wire maximum calculated for the configured names |
+| `RUST_LOG` | `safexip=info` | Tracing filter; use `safexip=debug` for DNS queries |
 
-Configuration is validated before listeners start. Names are normalized, nameservers must be distinct and inside the zone, addresses and ports must parse, and short API keys are rejected.
+Configuration is validated before listeners start. Names are normalized to lowercase, nameservers must be distinct and inside the delegated zone, addresses and ports must parse correctly, and short API keys are rejected. The maximum token count is zone-dependent because DNS name and record overhead consume part of the 65,535-byte TCP message limit; an invalid setting reports the calculated maximum at startup. The count limit is a secondary bound: the API also accounts for the exact active token lengths and DNS message overhead on every presentation.
 
 ## Other installation methods
 
