@@ -13,7 +13,8 @@ case "$package" in
     dnf install -y curl bind-utils "$package"
     ;;
   *.pkg.tar.zst)
-    pacman -Sy --noconfirm curl bind "$package"
+    pacman -Sy --noconfirm curl bind
+    pacman -U --noconfirm "$package"
     ;;
   *) echo "unsupported package: $package" >&2; exit 2 ;;
 esac
@@ -25,22 +26,30 @@ SAFEXIP_NS_HOSTNAME=ns1.xip.test
 SAFEXIP_NS_HOSTNAME2=ns2.xip.test
 SAFEXIP_NS_IP=127.0.0.1
 SAFEXIP_DNS_BIND=127.0.0.1
-SAFEXIP_DNS_PORT=5353
+SAFEXIP_DNS_PORT=1053
 SAFEXIP_API_BIND=127.0.0.1
 SAFEXIP_API_PORT=18080
 EOF
 chmod 0600 /etc/safexip/env
 
 systemctl daemon-reload
-systemctl start safexip.service
+if ! systemctl start safexip.service; then
+  systemctl status safexip.service --no-pager || true
+  journalctl --unit safexip.service --no-pager || true
+  exit 1
+fi
 for _ in $(seq 1 100); do
   if curl --fail --silent http://127.0.0.1:18080/health | grep -q '"status":"ok"'; then
     break
   fi
   sleep 0.1
 done
-systemctl is-active --quiet safexip.service
-test "$(dig @127.0.0.1 -p 5353 127-0-0-1.xip.test A +short)" = "127.0.0.1"
-test "$(dig @127.0.0.1 -p 5353 127-0-0-1.xip.test A +tcp +short)" = "127.0.0.1"
+if ! systemctl is-active --quiet safexip.service; then
+  systemctl status safexip.service --no-pager || true
+  journalctl --unit safexip.service --no-pager || true
+  exit 1
+fi
+test "$(dig @127.0.0.1 -p 1053 127-0-0-1.xip.test A +short)" = "127.0.0.1"
+test "$(dig @127.0.0.1 -p 1053 127-0-0-1.xip.test A +tcp +short)" = "127.0.0.1"
 systemctl stop safexip.service
 systemctl is-active --quiet safexip.service && exit 1 || true
