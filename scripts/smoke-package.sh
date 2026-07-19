@@ -13,7 +13,8 @@ case "$package" in
     dnf install -y curl bind-utils "$package"
     ;;
   *.pkg.tar.zst)
-    pacman -Sy --noconfirm curl bind "$package"
+    pacman -Sy --noconfirm curl bind
+    pacman -U --noconfirm "$package"
     ;;
   *) echo "unsupported package: $package" >&2; exit 2 ;;
 esac

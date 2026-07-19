@@ -209,7 +209,7 @@ jobs:
         include:
           - format: deb
             base: ubuntu:24.04
-            install: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y systemd
+            install: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y systemd systemd-sysv
           - format: rpm
             base: fedora:latest
             install: dnf install -y systemd

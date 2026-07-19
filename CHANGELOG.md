@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- *(packaging)* fix Debian and Arch package smoke environments
 - *(dns)* correct authoritative SOA and NS responses ([#16](https://github.com/ineentho/safexip/pull/16))
 - *(dns)* enforce ACME TXT wire capacity ([#15](https://github.com/ineentho/safexip/pull/15))
 - *(dns)* enforce query semantics and apex-only authority ([#13](https://github.com/ineentho/safexip/pull/13))
