@@ -8,7 +8,6 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/ineentho/safexip"
 homepage = "https://github.com/ineentho/safexip"
 readme = "README.md"
-publish = false
 
 [dependencies]
 hickory-proto = "0.26.1"

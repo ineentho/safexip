@@ -6,6 +6,11 @@ on:
       - "v*.*.*"
   pull_request:
   workflow_dispatch:
+    inputs:
+      generate_release_notes:
+        description: Generate notes when creating a release manually
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -347,4 +352,4 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
-          generate_release_notes: true
+          generate_release_notes: ${{ github.event_name != 'workflow_dispatch' || inputs.generate_release_notes }}
