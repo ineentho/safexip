@@ -2,7 +2,7 @@
 
 This guide deploys safexip behind Traefik on Ubuntu 24.04 or 26.04. Traefik obtains the API endpoint certificate from Let's Encrypt with HTTP-01; employees obtain independently held wildcard certificates with lego and DNS-01. The public API must always be behind verified HTTPS because HTTP Basic authentication does not encrypt credentials.
 
-The repository copy of this guide and the files under [`deploy/`](../deploy/) are versioned with each release tag. Select the tag matching the release you deploy. Never use `latest` in production.
+The repository copy of this guide and the files under [`deploy/`](../deploy/) are versioned with each release tag. The deployment uses the `latest` image by default; edit the safexip `image:` entry in `compose.yml` if you want to pin a specific release.
 
 ## Choose the correct procedure
 
@@ -78,9 +78,9 @@ sudo docker compose version
 
 The examples use `sudo docker`; membership in the `docker` group is effectively root-equivalent.
 
-### 2. Install the versioned deployment files
+### 2. Install the deployment files
 
-Check out or download the source tag matching the release. The commands below never replace existing deployment files:
+Check out or download the desired source revision. The commands below never replace existing deployment files:
 
 ```bash
 if sudo test -e /opt/safexip/compose.yml; then
@@ -101,7 +101,10 @@ sudo deploy/initialize.sh /opt/safexip
 
 `initialize.sh` creates `letsencrypt/acme.json` and `safexip.env` only when absent. On every later run it prints that existing state is being preserved. It never rotates a key or truncates ACME data.
 
-Edit `/opt/safexip/.env` and replace all documentation values. Replace `REPLACE_WITH_RELEASE_DIGEST` in `SAFEXIP_IMAGE` with the digest published for the selected release:
+Edit `/opt/safexip/.env` and replace the site-specific documentation values.
+The Compose file uses `ineentho/safexip:latest` by default. To pin a release,
+change the safexip `image:` entry in `/opt/safexip/compose.yml` to a versioned
+tag or a tag plus digest before pulling:
 
 ```bash
 sudoedit /opt/safexip/.env
@@ -199,7 +202,7 @@ Run the same `lego run ...` command periodically. Lego 5 reuses existing state a
 
 ## Upgrade
 
-An upgrade must not run first-install or rotation commands. Back up `/opt/safexip`, update only `SAFEXIP_IMAGE` in `.env` to the new release tag and verified digest, and validate before recreating the application container:
+An upgrade must not run first-install or rotation commands. Back up `/opt/safexip`. If the deployment is pinned, update only the safexip `image:` entry in `compose.yml` to the desired image reference. With the default `latest` tag, leave it unchanged. Then pull and validate before recreating the application container:
 
 ```bash
 cd /opt/safexip

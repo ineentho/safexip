@@ -14,16 +14,8 @@ for required in README.md SECURITY.md \
   }
 done
 
-cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
-documented_version=$(sed -n 's/^SAFEXIP_IMAGE=ineentho\/safexip:\([^@]*\)@sha256:.*/\1/p' deploy/.env.example)
-if [ "$documented_version" != "$cargo_version" ]; then
-  printf 'documented image version %s does not match Cargo version %s\n' \
-    "${documented_version:-<missing>}" "$cargo_version" >&2
-  exit 1
-fi
-
-grep -q 'REPLACE_WITH_RELEASE_DIGEST' deploy/.env.example || {
-  printf 'deploy/.env.example must fail closed until a verified release digest is supplied\n' >&2
+grep -q '^    image: ineentho/safexip:latest$' deploy/compose.yml || {
+  printf 'deploy/compose.yml must use the latest safexip image by default\n' >&2
   exit 1
 }
 
@@ -119,4 +111,4 @@ else
   printf 'docker compose is unavailable; skipping Compose rendering\n' >&2
 fi
 
-printf 'Production documentation validation passed for safexip %s.\n' "$cargo_version"
+printf '%s\n' 'Production documentation validation passed.'

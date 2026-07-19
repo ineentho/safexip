@@ -5,7 +5,7 @@ Complete this checklist before merging the release PR. `release-plz` creates the
 ## Versioned artifacts
 
 - [ ] Confirm the release PR updated the version in `Cargo.toml` and `Cargo.lock` and updated `CHANGELOG.md`.
-- [ ] Update `SAFEXIP_IMAGE` in `deploy/.env.example` to the same version. Keep the invalid digest placeholder until the release digest is available.
+- [ ] Confirm `deploy/compose.yml` uses `ineentho/safexip:latest` and the production guide documents how to pin a versioned tag.
 - [ ] Confirm `docs/production.md`, `deploy/compose.yml`, and both initialization helpers are committed before merging.
 - [ ] Run `make check` and `scripts/validate-production-docs.sh`.
 

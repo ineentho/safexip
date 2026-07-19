@@ -34,7 +34,7 @@ services:
         max-file: "3"
 
   safexip:
-    image: ${SAFEXIP_IMAGE:?Set SAFEXIP_IMAGE to the release tag and verified digest}
+    image: ineentho/safexip:latest
     container_name: safexip
     restart: unless-stopped
     env_file:

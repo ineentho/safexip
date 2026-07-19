@@ -31,7 +31,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - name: Validate versioned production documentation
+      - name: Validate production documentation
         run: scripts/validate-production-docs.sh
 
       - name: Install Rust

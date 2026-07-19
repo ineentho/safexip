@@ -42,7 +42,7 @@ lego run \
   --accept-tos
 ```
 
-For a remote, HTTPS-protected, release-pinned deployment, follow the **[production deployment guide](docs/production.md)**. It includes separate first-install, upgrade, recovery, and destructive credential-rotation procedures. Never expose the authenticated API over plain HTTP.
+For a remote, HTTPS-protected deployment, follow the **[production deployment guide](docs/production.md)**. It uses the latest image by default, supports pinning a specific release, and includes separate first-install, upgrade, recovery, and destructive credential-rotation procedures. Never expose the authenticated API over plain HTTP.
 
 ## What safexip serves
 
@@ -164,9 +164,9 @@ The repository setting **Allow GitHub Actions to create and approve pull
 requests** must be enabled so the workflow can maintain the release PR. For a
 manual fallback, create a matching `vX.Y.Z` tag and dispatch the release
 workflow from that tag.
-CI and the release workflow verify that the versioned production guide and
-Compose artifacts match the Cargo version and preserve existing deployment
-state when initialization is rerun.
+CI and the release workflow verify that the production guide and Compose
+artifacts are complete, use the latest image by default, and preserve existing
+deployment state when initialization is rerun.
 
 The release workflow verifies formatting, Clippy, unit and real-listener integration tests, dependency advisories, tag/version equality, static linkage, clean installation of every package format, and systemd/OpenRC upgrade and removal behavior. Its service tests exercise health plus UDP and TCP DNS. It also smoke-tests the exact amd64/arm64 image digests with the documented UID, capabilities, read-only filesystem, and resource limits. Four amd64 Linux packages, checksums, and the public multi-platform Docker tags `${VERSION}` and `latest` are published only after the required checks pass, then the packages are attached to the GitHub release. Before a release, also perform the [delegated-zone ACME staging validation](docs/pre-release-acme.md).
 
