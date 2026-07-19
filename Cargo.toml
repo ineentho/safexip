@@ -24,7 +24,7 @@ chrono = "0.4"
 base64 = "0.22"
 subtle = "2"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["limit", "timeout"] }
+tower-http = { version = "0.7", features = ["limit", "timeout"] }
 
 [dev-dependencies]
 futures-util = "0.3"
