@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+
+name="safexip"
+description="safexip xip-style DNS server"
+command="/usr/bin/safexip"
+command_user="safexip:safexip"
+command_background="yes"
+pidfile="/run/safexip/safexip.pid"
+
+depend() {
+	need net
+}
+
+start_pre() {
+	checkpath --directory --mode 0755 --owner safexip:safexip /run/safexip
+	if [ ! -r /etc/safexip/env ]; then
+		eerror "/etc/safexip/env is missing"
+		return 1
+	fi
+	set -a
+	. /etc/safexip/env
+	set +a
+}

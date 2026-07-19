@@ -56,3 +56,16 @@ jobs:
 
       - name: Check locked dependencies
         run: cargo check --locked
+
+  bounded-abuse:
+    name: Bounded TCP connection abuse
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+      - name: Exercise the TCP connection limit
+        run: |
+          ulimit -n 4096
+          cargo test --test server_e2e tcp_connection_limit_releases_capacity --locked -- --ignored --exact
