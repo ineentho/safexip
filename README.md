@@ -223,6 +223,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=1m,mode=1777
+    mem_limit: 128m
+    cpus: 1.0
     pids_limit: 128
     stop_grace_period: 15s
     networks:
@@ -605,7 +607,7 @@ Run the same local quality gates as CI:
 make check
 ```
 
-The release workflow verifies formatting, Clippy, tests, dependency advisories, tag/version equality, static linkage, clean installation of every package format, and systemd/OpenRC upgrade and removal behavior. Its service tests exercise health plus UDP and TCP DNS. It publishes four amd64 Linux packages, checksums, and amd64/arm64 Docker images only after those checks pass.
+The release workflow verifies formatting, Clippy, unit and real-listener integration tests, dependency advisories, tag/version equality, static linkage, clean installation of every package format, and systemd/OpenRC upgrade and removal behavior. Its service tests exercise health plus UDP and TCP DNS. It also smoke-tests the exact amd64/arm64 image digests with the documented UID, capabilities, read-only filesystem, and resource limits. Four amd64 Linux packages, checksums, public Docker tags, and the GitHub release are published only after the required checks pass. Before a release, also perform the [delegated-zone ACME staging validation](docs/pre-release-acme.md).
 
 ## License
 
