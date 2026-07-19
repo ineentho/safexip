@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/ineentho/safexip/compare/v0.2.2...v0.2.3) - 2026-07-19
+
+### Added
+
+- *(deploy)* default production Compose to latest image
+
+### Other
+
+- *(deps)* bump the cargo-dependencies group across 1 directory with 3 updates ([#22](https://github.com/ineentho/safexip/pull/22))
+- *(deps)* bump rust from 1.96.0-bookworm to 1.97.0-bookworm ([#24](https://github.com/ineentho/safexip/pull/24))
+- *(deps)* bump the github-actions group across 1 directory with 4 updates ([#23](https://github.com/ineentho/safexip/pull/23))
+
 ## [0.2.2](https://github.com/ineentho/safexip/compare/v0.2.1...v0.2.2) - 2026-07-19
 
 ### Fixed
