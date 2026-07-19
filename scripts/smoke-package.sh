@@ -33,14 +33,22 @@ EOF
 chmod 0600 /etc/safexip/env
 
 systemctl daemon-reload
-systemctl start safexip.service
+if ! systemctl start safexip.service; then
+  systemctl status safexip.service --no-pager || true
+  journalctl --unit safexip.service --no-pager || true
+  exit 1
+fi
 for _ in $(seq 1 100); do
   if curl --fail --silent http://127.0.0.1:18080/health | grep -q '"status":"ok"'; then
     break
   fi
   sleep 0.1
 done
-systemctl is-active --quiet safexip.service
+if ! systemctl is-active --quiet safexip.service; then
+  systemctl status safexip.service --no-pager || true
+  journalctl --unit safexip.service --no-pager || true
+  exit 1
+fi
 test "$(dig @127.0.0.1 -p 5353 127-0-0-1.xip.test A +short)" = "127.0.0.1"
 test "$(dig @127.0.0.1 -p 5353 127-0-0-1.xip.test A +tcp +short)" = "127.0.0.1"
 systemctl stop safexip.service
