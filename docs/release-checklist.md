@@ -1,12 +1,12 @@
 # Release documentation checklist
 
-Complete this checklist before creating a public release tag. The release workflow repeats the automated checks from the tagged source snapshot; the manual smoke tests catch host, firewall, DNS, and upgrade behavior that an isolated CI fixture cannot reproduce.
+Complete this checklist before merging the release PR. `release-plz` creates the public release tag from that merge. The release workflow repeats the automated checks from the tagged source snapshot; the manual smoke tests catch host, firewall, DNS, and upgrade behavior that an isolated CI fixture cannot reproduce.
 
 ## Versioned artifacts
 
-- [ ] Update the version in `Cargo.toml` and `Cargo.lock`.
+- [ ] Confirm the release PR updated the version in `Cargo.toml` and `Cargo.lock` and updated `CHANGELOG.md`.
 - [ ] Update `SAFEXIP_IMAGE` in `deploy/.env.example` to the same version. Keep the invalid digest placeholder until the release digest is available.
-- [ ] Confirm `docs/production.md`, `deploy/compose.yml`, and both initialization helpers are committed before tagging.
+- [ ] Confirm `docs/production.md`, `deploy/compose.yml`, and both initialization helpers are committed before merging.
 - [ ] Run `make check` and `scripts/validate-production-docs.sh`.
 
 ## Clean-environment validation
@@ -34,6 +34,6 @@ Do not execute a destructive rotation procedure merely to validate an ordinary r
 
 ## Publication
 
-- [ ] Create the tag only after the guide and deployment files are in the commit being tagged.
+- [ ] Merge the release PR only after the guide and deployment files are in the commit that `release-plz` will tag.
 - [ ] After the workflow publishes the multi-platform image, publish its verified digest with the release and substitute it when testing the final Compose deployment.
 - [ ] Confirm the GitHub release links to the production guide in the matching source tag.

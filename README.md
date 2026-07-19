@@ -144,9 +144,19 @@ make check
 scripts/validate-production-docs.sh
 ```
 
-Before tagging, complete [`docs/release-checklist.md`](docs/release-checklist.md). CI and the release workflow verify that the versioned production guide and Compose artifacts match the Cargo version and preserve existing deployment state when initialization is rerun.
+[`release-plz`](https://release-plz.dev/) maintains a release PR with the next
+version and changelog. Complete [`docs/release-checklist.md`](docs/release-checklist.md)
+before merging that PR. Merging it creates the matching `vX.Y.Z` tag and GitHub
+release, then dispatches the release workflow.
 
-The release workflow verifies formatting, Clippy, unit and real-listener integration tests, dependency advisories, tag/version equality, static linkage, clean installation of every package format, and systemd/OpenRC upgrade and removal behavior. Its service tests exercise health plus UDP and TCP DNS. It also smoke-tests the exact amd64/arm64 image digests with the documented UID, capabilities, read-only filesystem, and resource limits. Four amd64 Linux packages, checksums, public Docker tags, and the GitHub release are published only after the required checks pass. Before a release, also perform the [delegated-zone ACME staging validation](docs/pre-release-acme.md).
+The repository setting **Allow GitHub Actions to create and approve pull
+requests** must be enabled so the workflow can maintain the release PR. Manual
+`vX.Y.Z` tags remain supported as a fallback and run the same release workflow.
+CI and the release workflow verify that the versioned production guide and
+Compose artifacts match the Cargo version and preserve existing deployment
+state when initialization is rerun.
+
+The release workflow verifies formatting, Clippy, unit and real-listener integration tests, dependency advisories, tag/version equality, static linkage, clean installation of every package format, and systemd/OpenRC upgrade and removal behavior. Its service tests exercise health plus UDP and TCP DNS. It also smoke-tests the exact amd64/arm64 image digests with the documented UID, capabilities, read-only filesystem, and resource limits. Four amd64 Linux packages, checksums, and the public multi-platform Docker tags `${VERSION}` and `latest` are published only after the required checks pass, then the packages are attached to the GitHub release. Before a release, also perform the [delegated-zone ACME staging validation](docs/pre-release-acme.md).
 
 ## License
 
