@@ -8,10 +8,15 @@ use crate::wire::AcmeWireCapacity;
 
 #[derive(Clone)]
 pub struct AcmeRecords {
-    records: Arc<RwLock<HashMap<String, Vec<Token>>>>,
+    state: Arc<RwLock<ZoneState>>,
     lifetime: Duration,
     max_tokens: usize,
     wire_capacity: AcmeWireCapacity,
+}
+
+struct ZoneState {
+    records: HashMap<String, Vec<Token>>,
+    serial: u32,
 }
 
 #[derive(Clone)]
@@ -28,8 +33,21 @@ pub enum AddError {
 
 impl AcmeRecords {
     pub fn new(lifetime: Duration, max_tokens: usize, wire_capacity: AcmeWireCapacity) -> Self {
+        let serial = chrono::Utc::now().timestamp() as u32;
+        Self::with_serial(lifetime, max_tokens, wire_capacity, serial)
+    }
+
+    pub(crate) fn with_serial(
+        lifetime: Duration,
+        max_tokens: usize,
+        wire_capacity: AcmeWireCapacity,
+        serial: u32,
+    ) -> Self {
         Self {
-            records: Arc::new(RwLock::new(HashMap::new())),
+            state: Arc::new(RwLock::new(ZoneState {
+                records: HashMap::new(),
+                serial,
+            })),
             lifetime,
             max_tokens,
             wire_capacity,
@@ -37,67 +55,108 @@ impl AcmeRecords {
     }
 
     pub async fn add(&self, name: String, value: String) -> Result<(), AddError> {
-        let mut map = self.records.write().await;
-        prune(&mut map);
+        let mut state = self.state.write().await;
+        let changed = prune(&mut state.records);
 
-        if let Some(existing) = map
+        if let Some(existing) = state
+            .records
             .get_mut(&name)
             .and_then(|tokens| tokens.iter_mut().find(|token| token.value == value))
         {
             existing.expires_at = Instant::now() + self.lifetime;
+            if changed {
+                advance_serial(&mut state.serial);
+            }
             return Ok(());
         }
 
-        let token_count: usize = map.values().map(Vec::len).sum();
+        let token_count: usize = state.records.values().map(Vec::len).sum();
         if token_count >= self.max_tokens {
+            if changed {
+                advance_serial(&mut state.serial);
+            }
             return Err(AddError::TokenLimitReached);
         }
 
-        let mut prospective_values: Vec<String> = map
+        let mut prospective_values: Vec<String> = state
+            .records
             .values()
             .flatten()
             .map(|token| token.value.clone())
             .collect();
         prospective_values.push(value.clone());
         if !self.wire_capacity.fits(&prospective_values) {
+            if changed {
+                advance_serial(&mut state.serial);
+            }
             return Err(AddError::DnsWireCapacityReached);
         }
 
-        map.entry(name).or_default().push(Token {
+        state.records.entry(name).or_default().push(Token {
             value,
             expires_at: Instant::now() + self.lifetime,
         });
+        advance_serial(&mut state.serial);
         Ok(())
     }
 
     pub async fn remove(&self, name: &str, value: &str) {
-        let mut map = self.records.write().await;
-        if let Some(values) = map.get_mut(name) {
+        let mut state = self.state.write().await;
+        let mut changed = prune(&mut state.records);
+        if let Some(values) = state.records.get_mut(name) {
+            let old_len = values.len();
             values.retain(|token| token.value != value);
+            changed |= values.len() != old_len;
             if values.is_empty() {
-                map.remove(name);
+                state.records.remove(name);
             }
         }
-        prune(&mut map);
+        if changed {
+            advance_serial(&mut state.serial);
+        }
     }
 
+    #[cfg(test)]
     pub async fn get(&self, name: &str) -> Vec<String> {
-        let mut map = self.records.write().await;
-        prune(&mut map);
-        map.get(name)
+        self.get_with_serial(name).await.0
+    }
+
+    pub async fn get_with_serial(&self, name: &str) -> (Vec<String>, u32) {
+        let mut state = self.state.write().await;
+        if prune(&mut state.records) {
+            advance_serial(&mut state.serial);
+        }
+        let values = state
+            .records
+            .get(name)
             .into_iter()
             .flatten()
             .map(|token| token.value.clone())
-            .collect()
+            .collect();
+        (values, state.serial)
+    }
+
+    pub async fn serial(&self) -> u32 {
+        let mut state = self.state.write().await;
+        if prune(&mut state.records) {
+            advance_serial(&mut state.serial);
+        }
+        state.serial
     }
 }
 
-fn prune(records: &mut HashMap<String, Vec<Token>>) {
+fn advance_serial(serial: &mut u32) {
+    *serial = serial.wrapping_add(1);
+}
+
+fn prune(records: &mut HashMap<String, Vec<Token>>) -> bool {
     let now = Instant::now();
+    let old_len: usize = records.values().map(Vec::len).sum();
     records.retain(|_, tokens| {
         tokens.retain(|token| token.expires_at > now);
         !tokens.is_empty()
     });
+    records.values().map(Vec::len).sum::<usize>() != old_len
 }
 
 #[cfg(test)]
@@ -193,5 +252,45 @@ mod tests {
         let mut overflow = values.clone();
         overflow.push("z".repeat(255));
         assert!(!capacity().fits(&overflow));
+    }
+
+    #[tokio::test]
+    async fn serial_tracks_effective_rrset_changes_only() {
+        let records = AcmeRecords::with_serial(Duration::from_secs(60), 1, capacity(), 100);
+        assert_eq!(records.serial().await, 100);
+        assert_eq!(records.serial().await, 100);
+
+        records.add("name".into(), "value".into()).await.unwrap();
+        assert_eq!(records.serial().await, 101);
+
+        // Refreshing an identical RR does not change the current zone data.
+        records.add("name".into(), "value".into()).await.unwrap();
+        assert_eq!(records.serial().await, 101);
+
+        assert_eq!(
+            records.add("name".into(), "other".into()).await,
+            Err(AddError::TokenLimitReached)
+        );
+        assert_eq!(records.serial().await, 101);
+
+        records.remove("name", "missing").await;
+        assert_eq!(records.serial().await, 101);
+        records.remove("name", "value").await;
+        assert_eq!(records.serial().await, 102);
+    }
+
+    #[tokio::test]
+    async fn serial_advances_once_when_expired_records_are_pruned() {
+        let records =
+            AcmeRecords::with_serial(Duration::from_millis(10), 2, capacity(), u32::MAX - 1);
+        records.add("name".into(), "one".into()).await.unwrap();
+        records.add("name".into(), "two".into()).await.unwrap();
+        assert_eq!(records.serial().await, 0);
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let (values, serial) = records.get_with_serial("name").await;
+        assert!(values.is_empty());
+        assert_eq!(serial, 1);
+        assert_eq!(records.serial().await, 1);
     }
 }
