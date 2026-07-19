@@ -58,13 +58,15 @@ DNS is served over UDP and TCP. Oversized UDP responses are truncated so resolve
 {"status":"ok","domain":"xip.example.com"}
 ```
 
-`POST /present` and `POST /cleanup` require HTTP Basic authentication. The username is ignored; the password must equal `SAFEXIP_API_KEY`.
+`POST /present` and `POST /cleanup` require HTTP Basic authentication. The username is ignored; the password must equal `SAFEXIP_API_KEY`. Authentication is checked before the request body is read, and unauthorized responses include the standard Basic authentication challenge.
 
 ```json
 {"fqdn":"_acme-challenge.xip.example.com.","value":"base64url-acme-value"}
 ```
 
 Only the configured zone's exact challenge name is accepted. Tokens must be non-empty DNS TXT strings no longer than 255 bytes. Duplicate values are refreshed, concurrent values are separate TXT records, active tokens are bounded, and abandoned tokens expire automatically. A presentation is rejected with HTTP 503 before it would make the complete active TXT record set too large for a DNS-over-TCP message; existing records are left unchanged.
+
+The application also applies defense-in-depth HTTP limits: 1 KiB request bodies, a 10-second request timeout, a 5-second header timeout, 64 concurrent authenticated requests, 128 HTTP connections, and an authenticated mutation rate of 20 requests per second. The rate-limit burst is at least 100 and scales to twice the configured active-token limit so a normal concurrent present/cleanup cycle is not blocked. These limits bound a directly exposed or incorrectly proxied process, but they do not provide transport security: keep the API on loopback or a private backend network and use verified HTTPS for every remote client.
 
 The endpoints implement lego's [`httpreq` provider](https://go-acme.github.io/lego/dns/httpreq/):
 
