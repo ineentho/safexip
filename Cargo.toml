@@ -1,6 +1,6 @@
 [package]
 name = "safexip"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 rust-version = "1.88"
 description = "Self-hosted xip-style authoritative DNS server with an ACME DNS-01 API"
