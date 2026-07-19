@@ -26,7 +26,7 @@ SAFEXIP_NS_HOSTNAME=ns1.xip.test
 SAFEXIP_NS_HOSTNAME2=ns2.xip.test
 SAFEXIP_NS_IP=127.0.0.1
 SAFEXIP_DNS_BIND=127.0.0.1
-SAFEXIP_DNS_PORT=5353
+SAFEXIP_DNS_PORT=1053
 SAFEXIP_API_BIND=127.0.0.1
 SAFEXIP_API_PORT=18080
 EOF
@@ -49,7 +49,7 @@ if ! systemctl is-active --quiet safexip.service; then
   journalctl --unit safexip.service --no-pager || true
   exit 1
 fi
-test "$(dig @127.0.0.1 -p 5353 127-0-0-1.xip.test A +short)" = "127.0.0.1"
-test "$(dig @127.0.0.1 -p 5353 127-0-0-1.xip.test A +tcp +short)" = "127.0.0.1"
+test "$(dig @127.0.0.1 -p 1053 127-0-0-1.xip.test A +short)" = "127.0.0.1"
+test "$(dig @127.0.0.1 -p 1053 127-0-0-1.xip.test A +tcp +short)" = "127.0.0.1"
 systemctl stop safexip.service
 systemctl is-active --quiet safexip.service && exit 1 || true
