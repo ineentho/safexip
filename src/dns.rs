@@ -145,13 +145,24 @@ impl DnsHandler {
             return response;
         }
 
+        // Read the serial and any dynamic TXT values from one state version so
+        // an answer can never advertise a different zone version from its data.
+        let acme_name = self.config.acme_name();
+        let (serial, txt_values) = if qtype == RecordType::TXT && qname_str == acme_name {
+            let (values, serial) = self.acme.get_with_serial(&qname_str).await;
+            (serial, values)
+        } else {
+            (self.acme.serial().await, Vec::new())
+        };
+        let soa = self.soa(serial);
+
         // Always include SOA in authority for in-zone responses.
-        response.add_authority(self.soa());
+        response.add_authority(soa.clone());
 
         match qtype {
             RecordType::SOA => {
                 if qname_str == self.config.domain {
-                    response.add_answer(self.soa());
+                    response.add_answer(soa);
                 } else if !self.name_exists(&qname_str) {
                     response.metadata.response_code = ResponseCode::NXDomain;
                 }
@@ -189,7 +200,7 @@ impl DnsHandler {
                 // the authority section above.
             }
             RecordType::TXT => {
-                let records = self.resolve_txt(&qname_str).await;
+                let records = self.txt_records(&qname_str, txt_values);
                 if records.is_empty() {
                     if !self.name_exists(&qname_str) {
                         response.metadata.response_code = ResponseCode::NXDomain;
@@ -228,13 +239,11 @@ impl DnsHandler {
         None
     }
 
-    async fn resolve_txt(&self, qname: &str) -> Vec<Record> {
-        let acme_name = self.config.acme_name();
-        if qname != acme_name {
+    fn txt_records(&self, qname: &str, values: Vec<String>) -> Vec<Record> {
+        if qname != self.config.acme_name() {
             return Vec::new();
         }
 
-        let values = self.acme.get(&acme_name).await;
         let Ok(name) = Name::from_ascii(qname) else {
             return Vec::new();
         };
@@ -290,8 +299,7 @@ impl DnsHandler {
         ]
     }
 
-    fn soa(&self) -> Record {
-        let serial = chrono::Utc::now().timestamp() as u32;
+    fn soa(&self, serial: u32) -> Record {
         wire::soa_record(
             &Name::from_ascii(&self.config.domain).unwrap(),
             &Name::from_ascii(&self.config.ns_hostname).unwrap(),
@@ -348,6 +356,16 @@ mod tests {
         let raw = query_msg(name, qtype);
         let resp_bytes = handler.handle(&raw).await;
         Message::from_vec(&resp_bytes).unwrap()
+    }
+
+    fn soa_serial(records: &[Record]) -> u32 {
+        records
+            .iter()
+            .find_map(|record| match &record.data {
+                RData::SOA(soa) => Some(soa.serial),
+                _ => None,
+            })
+            .expect("SOA record")
     }
 
     // Regression for the NXDOMAIN-cut bug (RFC 8020): an A query on the ACME
@@ -485,28 +503,102 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn soa_and_ns_are_apex_only_with_correct_owners() {
+    async fn soa_and_ns_follow_authoritative_owner_semantics() {
         let handler = DnsHandler {
             config: make_config(),
-            acme: acme(),
+            acme: AcmeRecords::with_serial(
+                Duration::from_secs(60),
+                100,
+                AcmeWireCapacity::from_config(&make_config()),
+                123,
+            ),
         };
         for qtype in [RecordType::SOA, RecordType::NS] {
-            let apex = run(&handler, "xip.test", qtype).await;
+            let apex = run(&handler, "XiP.TeSt", qtype).await;
+            assert_eq!(apex.metadata.response_code, ResponseCode::NoError);
+            assert!(apex.metadata.authoritative);
             assert!(!apex.answers.is_empty());
             assert!(apex.answers.iter().all(|record| {
                 record.name.to_ascii() == "xip.test."
                     && record.dns_class == DNSClass::IN
                     && record.record_type() == qtype
             }));
+            assert_eq!(apex.authorities.len(), 1);
+            assert_eq!(apex.authorities[0].name.to_ascii(), "xip.test.");
+            assert_eq!(soa_serial(&apex.authorities), 123);
+            if qtype == RecordType::SOA {
+                assert_eq!(apex.answers.len(), 1);
+                assert_eq!(soa_serial(&apex.answers), 123);
+                assert!(apex.additionals.is_empty());
+            } else {
+                assert_eq!(apex.answers.len(), 2);
+                assert_eq!(apex.additionals.len(), 2);
+                assert!(apex.additionals.iter().all(|record| {
+                    record.record_type() == RecordType::A
+                        && matches!(
+                            record.name.to_ascii().as_str(),
+                            "ns1.xip.test." | "ns2.xip.test."
+                        )
+                }));
+            }
 
-            let existing = run(&handler, "ns1.xip.test", qtype).await;
+            let existing = run(&handler, "127-0-0-1.xIp.TeSt", qtype).await;
             assert_eq!(existing.metadata.response_code, ResponseCode::NoError);
+            assert!(existing.metadata.authoritative);
             assert!(existing.answers.is_empty());
+            assert_eq!(existing.authorities.len(), 1);
+            assert_eq!(existing.authorities[0].name.to_ascii(), "xip.test.");
+            assert_eq!(soa_serial(&existing.authorities), 123);
+            assert!(existing.additionals.is_empty());
 
             let nonexistent = run(&handler, "missing.xip.test", qtype).await;
             assert_eq!(nonexistent.metadata.response_code, ResponseCode::NXDomain);
+            assert!(nonexistent.metadata.authoritative);
             assert!(nonexistent.answers.is_empty());
+            assert_eq!(nonexistent.authorities.len(), 1);
+            assert_eq!(nonexistent.authorities[0].name.to_ascii(), "xip.test.");
+            assert_eq!(soa_serial(&nonexistent.authorities), 123);
+            assert!(nonexistent.additionals.is_empty());
+
+            let outside = run(&handler, "example.com", qtype).await;
+            assert_eq!(outside.metadata.response_code, ResponseCode::Refused);
+            assert!(!outside.metadata.authoritative);
+            assert!(outside.answers.is_empty());
+            assert!(outside.authorities.is_empty());
+            assert!(outside.additionals.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn soa_serial_is_stable_and_tracks_dynamic_zone_changes() {
+        let acme = AcmeRecords::with_serial(
+            Duration::from_secs(60),
+            100,
+            AcmeWireCapacity::from_config(&make_config()),
+            500,
+        );
+        let handler = DnsHandler {
+            config: make_config(),
+            acme: acme.clone(),
+        };
+
+        for _ in 0..2 {
+            let response = run(&handler, "xip.test", RecordType::SOA).await;
+            assert_eq!(soa_serial(&response.answers), 500);
+            assert_eq!(soa_serial(&response.authorities), 500);
+        }
+
+        acme.add("_acme-challenge.xip.test".into(), "token".into())
+            .await
+            .unwrap();
+        let txt = run(&handler, "_acme-challenge.xip.test", RecordType::TXT).await;
+        assert_eq!(txt.answers.len(), 1);
+        assert_eq!(soa_serial(&txt.authorities), 501);
+
+        acme.remove("_acme-challenge.xip.test", "token").await;
+        let response = run(&handler, "xip.test", RecordType::SOA).await;
+        assert_eq!(soa_serial(&response.answers), 502);
+        assert_eq!(soa_serial(&response.authorities), 502);
     }
 
     #[tokio::test]

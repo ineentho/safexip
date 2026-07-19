@@ -194,6 +194,38 @@ fn real_udp_tcp_api_expiration_and_shutdown() {
         let response = read_tcp_response(&mut tcp);
         assert_eq!(response.metadata.response_code, ResponseCode::NoError);
         assert!(!response.answers.is_empty());
+        assert!(response
+            .answers
+            .iter()
+            .all(|record| record.name.to_ascii() == "xip.test."));
+
+        write_tcp_query(&mut tcp, &query("127-0-0-1.xip.test", record_type));
+        let response = read_tcp_response(&mut tcp);
+        assert_eq!(response.metadata.response_code, ResponseCode::NoError);
+        assert!(response.metadata.authoritative);
+        assert!(response.answers.is_empty());
+        assert_eq!(response.authorities.len(), 1);
+        assert!(matches!(response.authorities[0].data, RData::SOA(_)));
+        assert_eq!(response.authorities[0].name.to_ascii(), "xip.test.");
+        assert!(response.additionals.is_empty());
+
+        write_tcp_query(&mut tcp, &query("missing.xip.test", record_type));
+        let response = read_tcp_response(&mut tcp);
+        assert_eq!(response.metadata.response_code, ResponseCode::NXDomain);
+        assert!(response.metadata.authoritative);
+        assert!(response.answers.is_empty());
+        assert_eq!(response.authorities.len(), 1);
+        assert!(matches!(response.authorities[0].data, RData::SOA(_)));
+        assert_eq!(response.authorities[0].name.to_ascii(), "xip.test.");
+        assert!(response.additionals.is_empty());
+
+        write_tcp_query(&mut tcp, &query("example.com", record_type));
+        let response = read_tcp_response(&mut tcp);
+        assert_eq!(response.metadata.response_code, ResponseCode::Refused);
+        assert!(!response.metadata.authoritative);
+        assert!(response.answers.is_empty());
+        assert!(response.authorities.is_empty());
+        assert!(response.additionals.is_empty());
     }
 
     let missing = server
