@@ -20,7 +20,11 @@ accounts in the same lego directory.
 
 ```bash
 install -d -m 0700 /tmp/safexip-lego-staging
-install -m 0600 /dev/null /tmp/safexip-api-key
+test ! -e /tmp/safexip-api-key || {
+  echo '/tmp/safexip-api-key already exists; refusing to replace it' >&2
+  exit 1
+}
+(umask 077 && touch /tmp/safexip-api-key)
 # Securely write only the API key to /tmp/safexip-api-key.
 
 ACME_EMAIL=release-test@example.com \

@@ -19,6 +19,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Validate production documentation
+        run: scripts/validate-production-docs.sh
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.96.0
         with:

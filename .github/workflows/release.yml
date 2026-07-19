@@ -26,8 +26,14 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate versioned production documentation
+        run: scripts/validate-production-docs.sh
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: clippy, rustfmt
       - name: Resolve and verify version
