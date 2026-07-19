@@ -562,7 +562,29 @@ Configuration is validated before listeners start. Names are normalized to lower
 
 ## Other installation methods
 
-Linux `.deb`, `.rpm`, and Arch packages are attached to each release. Packages install `/usr/bin/safexip`, `/usr/lib/systemd/system/safexip.service`, and `/etc/safexip/env`. The systemd unit runs under a dynamic unprivileged user with only `CAP_NET_BIND_SERVICE`. Alpine APK is not published: the release binary targets glibc and the packaged service is systemd-specific, while Alpine normally requires a musl binary and OpenRC integration.
+Every release includes static-musl amd64 packages tested in clean containers for these distributions:
+
+| Distribution tested by CI | Package | Service manager |
+|---|---|---|
+| Debian 12 (Bookworm) | `.deb` | systemd |
+| Fedora 43 | `.rpm` | systemd |
+| Alpine 3.22 | `.apk` | OpenRC |
+| Arch Linux rolling container | `.pkg.tar.zst` | systemd |
+
+All packages install `/usr/bin/safexip` and `/etc/safexip/env`. Debian, Fedora, and Arch packages install `/usr/lib/systemd/system/safexip.service`; Alpine installs `/etc/init.d/safexip`. The systemd unit uses a dynamic unprivileged user with only `CAP_NET_BIND_SERVICE`; the OpenRC package creates an unprivileged `safexip` user and grants the binary only that capability.
+
+Installation deliberately leaves the service stopped because the packaged API key is empty. Configure `/etc/safexip/env`, then enable and start it:
+
+```bash
+# Debian, Fedora, or Arch
+sudo systemctl enable --now safexip
+
+# Alpine
+sudo rc-update add safexip default
+sudo rc-service safexip start
+```
+
+Upgrades restart safexip only when it was already running. An inactive service remains inactive. Package removal stops and disables the service before removing its service definition.
 
 To build from source, install Rust 1.88 or newer:
 
@@ -570,9 +592,10 @@ To build from source, install Rust 1.88 or newer:
 cargo build --release --locked
 ```
 
-To build Linux packages on an amd64 Linux host with [nFPM](https://nfpm.goreleaser.com/):
+To build Linux packages on an amd64 Linux host, install the Rust `x86_64-unknown-linux-musl` target, a musl linker (the `musl-tools` package on Debian/Ubuntu), and [nFPM](https://nfpm.goreleaser.com/):
 
 ```bash
+rustup target add x86_64-unknown-linux-musl
 make package
 ```
 
@@ -584,7 +607,7 @@ Run the same local quality gates as CI:
 make check
 ```
 
-The release workflow verifies formatting, Clippy, unit and real-listener integration tests, dependency advisories, and tag/version equality. It installs and starts all three amd64 Linux packages in matching systemd environments and smoke-tests the exact amd64/arm64 image digests with the documented UID, capabilities, read-only filesystem, and resource limits. Public Docker tags and the GitHub release are created only after the required smoke tests pass. Before a release, also perform the [delegated-zone ACME staging validation](docs/pre-release-acme.md).
+The release workflow verifies formatting, Clippy, unit and real-listener integration tests, dependency advisories, tag/version equality, static linkage, clean installation of every package format, and systemd/OpenRC upgrade and removal behavior. Its service tests exercise health plus UDP and TCP DNS. It also smoke-tests the exact amd64/arm64 image digests with the documented UID, capabilities, read-only filesystem, and resource limits. Four amd64 Linux packages, checksums, public Docker tags, and the GitHub release are published only after the required checks pass. Before a release, also perform the [delegated-zone ACME staging validation](docs/pre-release-acme.md).
 
 ## License
 

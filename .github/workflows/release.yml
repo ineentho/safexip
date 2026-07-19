@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*.*.*"
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -66,32 +67,126 @@ jobs:
     name: Build release packages
     needs: quality
     runs-on: ubuntu-latest
-    container: rust:1.96.0-bookworm
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.96.0
-      - run: cargo build --release --locked
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build static package binary
+        run: |
+          cargo build --release --locked --target x86_64-unknown-linux-musl
+          binary=target/x86_64-unknown-linux-musl/release/safexip
+          "$binary" --version
+          if readelf --program-headers "$binary" | grep -q 'Requesting program interpreter'; then
+            echo "package binary is dynamically linked" >&2
+            exit 1
+          fi
+
       - name: Install verified nFPM
         run: |
           base_url="https://github.com/goreleaser/nfpm/releases/download/v2.47.0"
           curl --fail --location --silent --show-error "$base_url/checksums.txt" -o /tmp/nfpm-checksums.txt
           curl --fail --location --silent --show-error "$base_url/nfpm_2.47.0_amd64.deb" -o /tmp/nfpm_2.47.0_amd64.deb
           grep ' nfpm_2.47.0_amd64.deb$' /tmp/nfpm-checksums.txt | (cd /tmp && sha256sum --check -)
-          dpkg -i /tmp/nfpm_2.47.0_amd64.deb
-      - name: Build retained packages
+          sudo dpkg -i /tmp/nfpm_2.47.0_amd64.deb
+          nfpm --version
+
+      - name: Build packages
         env:
           VERSION: ${{ needs.quality.outputs.version }}
         run: |
           mkdir -p dist
-          for packager in deb rpm archlinux; do
+          for packager in deb rpm apk archlinux; do
             nfpm package --config nfpm.yaml --packager "$packager" --target dist/
           done
           sha256sum dist/* > dist/SHA256SUMS
-      - uses: actions/upload-artifact@v7
+
+      - name: Build lifecycle fixtures
+        env:
+          VERSION: ${{ needs.quality.outputs.version }}
+        run: |
+          mkdir -p dist-fixtures
+          for fixture_version in 0.0.0 0.0.1; do
+            for packager in deb apk; do
+              VERSION="$fixture_version" nfpm package \
+                --config nfpm.yaml --packager "$packager" --target dist-fixtures/
+            done
+          done
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v7
         with:
           name: safexip-packages
           path: dist/*
           if-no-files-found: error
+
+      - name: Upload lifecycle fixtures
+        uses: actions/upload-artifact@v7
+        with:
+          name: safexip-package-fixtures
+          path: dist-fixtures/*
+          if-no-files-found: error
+
+  package-tests:
+    name: Test ${{ matrix.format }} package
+    needs: packages
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        format: [deb, rpm, apk, archlinux]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          name: safexip-packages
+          path: dist
+
+      - name: Install and run package
+        run: packaging/tests/install-package.sh "${{ matrix.format }}" "$PWD/dist"
+
+  package-lifecycle:
+    name: Test package lifecycle
+    needs: packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          name: safexip-packages
+          path: dist
+
+      - name: Download lifecycle fixtures
+        uses: actions/download-artifact@v8
+        with:
+          name: safexip-package-fixtures
+          path: dist-fixtures
+
+      - name: Install DNS test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl dnsutils
+
+      - name: Test systemd install, upgrade, protocols, and removal
+        run: packaging/tests/systemd-lifecycle.sh "$PWD/dist" "$PWD/dist-fixtures"
+
+      - name: Test OpenRC install, upgrade, and removal
+        run: packaging/tests/openrc-lifecycle.sh "$PWD/dist" "$PWD/dist-fixtures"
 
   package-smoke:
     name: Smoke ${{ matrix.format }} package
@@ -233,7 +328,7 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    needs: [quality, packages, package-smoke, docker-publish]
+    needs: [quality, packages, package-tests, package-lifecycle, package-smoke, docker-publish]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
