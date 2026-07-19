@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a reproducible problem with safexip
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve safexip. Do not include API keys, ACME account data, or private keys.
+  - type: input
+    id: version
+    attributes:
+      label: safexip version
+      description: Output of `safexip --version`, or the exact image tag and digest.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation method
+      options:
+        - Docker / Compose
+        - Debian package
+        - RPM package
+        - Alpine package
+        - Arch package
+        - Built from source
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include a minimal sequence of commands or DNS/API requests with secrets removed.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Remove credentials, tokens, private domains, and IP addresses when necessary.
+      render: shell
+  - type: checkboxes
+    id: security
+    attributes:
+      label: Security check
+      options:
+        - label: This report does not disclose a security vulnerability. I will use the private reporting process in SECURITY.md for vulnerabilities.
+          required: true

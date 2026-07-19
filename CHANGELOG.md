@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Bound TCP DNS response writes so slow clients cannot retain a connection indefinitely.
+
+### Other
+
+- Add vulnerability-reporting, issue, and repository-readiness guidance.
+- Pin GitHub Actions, container bases, and the nFPM installer checksum, and configure weekly dependency updates.
+- Prevent release automation from running twice and duplicating generated notes.
+
 ## [0.2.1](https://github.com/ineentho/safexip/compare/v0.2.0...v0.2.1) - 2026-07-19
 
 ### Added

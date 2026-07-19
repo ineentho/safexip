@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a focused improvement to safexip
+title: "feature: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful change and any alternatives you considered.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and compatibility considerations
+      description: Note effects on DNS behavior, authentication, deployment, or existing users.

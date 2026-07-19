@@ -1,6 +1,15 @@
 # safexip
 
+[![CI](https://github.com/ineentho/safexip/actions/workflows/ci.yml/badge.svg)](https://github.com/ineentho/safexip/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/ineentho/safexip)](https://github.com/ineentho/safexip/releases/latest)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
 safexip is a small authoritative xip-style DNS server with the DNS-01 HTTP API expected by lego's `httpreq` provider. ACME accounts, certificates, and private keys stay with each employee; safexip stores only short-lived challenge values.
+
+> [!IMPORTANT]
+> safexip is intentionally authoritative for one delegated zone; it is not a
+> recursive resolver or a general-purpose DNS hosting platform. The
+> credential-bearing HTTP API must not be exposed over plain HTTP.
 
 ## Quick start
 
@@ -98,6 +107,8 @@ Configuration is validated before listeners start. Names are normalized to lower
 
 ## Other installation methods
 
+Download packages and checksums from the
+[latest GitHub release](https://github.com/ineentho/safexip/releases/latest).
 Every release includes static-musl amd64 packages tested in clean containers for these distributions:
 
 | Distribution tested by CI | Package | Service manager |
@@ -150,8 +161,9 @@ before merging that PR. Merging it creates the matching `vX.Y.Z` tag and GitHub
 release, then dispatches the release workflow.
 
 The repository setting **Allow GitHub Actions to create and approve pull
-requests** must be enabled so the workflow can maintain the release PR. Manual
-`vX.Y.Z` tags remain supported as a fallback and run the same release workflow.
+requests** must be enabled so the workflow can maintain the release PR. For a
+manual fallback, create a matching `vX.Y.Z` tag and dispatch the release
+workflow from that tag.
 CI and the release workflow verify that the versioned production guide and
 Compose artifacts match the Cargo version and preserve existing deployment
 state when initialization is rerun.
@@ -161,3 +173,8 @@ The release workflow verifies formatting, Clippy, unit and real-listener integra
 ## License
 
 Licensed under either the [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
+
+## Security
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md),
+not in a public issue.

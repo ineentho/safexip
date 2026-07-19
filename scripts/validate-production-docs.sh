@@ -4,7 +4,8 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_root"
 
-for required in README.md docs/production.md docs/release-checklist.md \
+for required in README.md SECURITY.md \
+  docs/production.md docs/release-checklist.md docs/public-release-checklist.md \
   deploy/compose.yml deploy/.env.example deploy/initialize.sh \
   deploy/initialize-employee.sh; do
   test -f "$required" || {

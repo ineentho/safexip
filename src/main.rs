@@ -197,7 +197,7 @@ async fn run_udp_dns(sock: UdpSocket, handler: Arc<DnsHandler>) {
 
 async fn run_tcp_dns(listener: TcpListener, handler: Arc<DnsHandler>) {
     const MAX_CONNECTIONS: usize = 1024;
-    const READ_TIMEOUT: Duration = Duration::from_secs(30);
+    const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
     let permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
@@ -220,7 +220,7 @@ async fn run_tcp_dns(listener: TcpListener, handler: Arc<DnsHandler>) {
 
             loop {
                 let mut len_buf = [0u8; 2];
-                match timeout(READ_TIMEOUT, stream.read_exact(&mut len_buf)).await {
+                match timeout(IO_TIMEOUT, stream.read_exact(&mut len_buf)).await {
                     Ok(Ok(_)) => {}
                     Ok(Err(error)) if error.kind() == ErrorKind::UnexpectedEof => return,
                     Ok(Err(error)) => {
@@ -237,7 +237,7 @@ async fn run_tcp_dns(listener: TcpListener, handler: Arc<DnsHandler>) {
                     return;
                 }
                 let mut msg_buf = vec![0u8; msg_len];
-                match timeout(READ_TIMEOUT, stream.read_exact(&mut msg_buf)).await {
+                match timeout(IO_TIMEOUT, stream.read_exact(&mut msg_buf)).await {
                     Ok(Ok(_)) => {}
                     Ok(Err(error)) => {
                         tracing::debug!("TCP read message from {addr}: {error}");
@@ -257,13 +257,21 @@ async fn run_tcp_dns(listener: TcpListener, handler: Arc<DnsHandler>) {
                     tracing::error!("TCP DNS response exceeded 65535 bytes");
                     return;
                 };
-                if let Err(error) = stream.write_all(&resp_len.to_be_bytes()).await {
-                    tracing::debug!("TCP write length to {addr}: {error}");
-                    return;
-                }
-                if let Err(error) = stream.write_all(&response).await {
-                    tracing::debug!("TCP write message to {addr}: {error}");
-                    return;
+                match timeout(IO_TIMEOUT, async {
+                    stream.write_all(&resp_len.to_be_bytes()).await?;
+                    stream.write_all(&response).await
+                })
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        tracing::debug!("TCP write to {addr}: {error}");
+                        return;
+                    }
+                    Err(_) => {
+                        tracing::debug!("TCP write to {addr} timed out");
+                        return;
+                    }
                 }
             }
         });
